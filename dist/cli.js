@@ -362,9 +362,10 @@ function main() {
                     }
                     catch (e) {
                         // Swap failed, warn user
-                        const context = `CRITICAL: Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
+                        const context = `⚠️  CRITICAL: NOTIFY THE USER ⚠️\n` +
+                            `Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
                             `(resets in ${fmtResetsIn(resetsAt)}), past the autoswap threshold of ${autoswapThreshold}%.\n` +
-                            `Autoswap failed; please use /swap or \`claude-juggler next\` to switch manually.`;
+                            `Autoswap FAILED. User must use /swap or \`claude-juggler next\` to manually switch accounts.`;
                         console.log(JSON.stringify({
                             hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
                         }));
@@ -374,17 +375,33 @@ function main() {
                     // Re-check to get new account info
                     const newName = currentAccount();
                     const newLabel = accountsData[newName || ""]?.label || newName || "unknown";
-                    const context = `ACCOUNT SWAPPED: Automatically switched from "${currentName}" (${label}, was at ${pct}% usage) ` +
-                        `to "${newName}" (${newLabel}) using strategy "${cfg.autoswapStrategy}".`;
-                    console.log(JSON.stringify({
-                        hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-                    }));
+                    // Check if we ended up on the same account (all accounts above threshold)
+                    if (newName === currentName) {
+                        const context = `🚨 CRITICAL: NOTIFY THE USER 🚨\n` +
+                            `Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
+                            `(resets in ${fmtResetsIn(resetsAt)}), and ALL other accounts are also at or above ` +
+                            `the ${autoswapThreshold}% autoswap threshold.\n` +
+                            `Cannot autoswap—all accounts have hit the limit. User must wait for a usage window to reset, ` +
+                            `or use /swap to manually select a lower-usage account.`;
+                        console.log(JSON.stringify({
+                            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                        }));
+                    }
+                    else {
+                        const context = `✓ NOTIFY THE USER: ACCOUNT SWAPPED\n` +
+                            `Automatically switched from "${currentName}" (${label}, was at ${pct}% usage) ` +
+                            `to "${newName}" (${newLabel}) using strategy "${cfg.autoswapStrategy}".`;
+                        console.log(JSON.stringify({
+                            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                        }));
+                    }
                 }
                 // Warn if at or above warning threshold
                 else if (pct >= warningThreshold) {
-                    const context = `Your active Claude account "${currentName}" (${label}) is at ${pct}% of its ` +
+                    const context = `⚠️  NOTIFY THE USER: Usage Approaching Limit\n` +
+                        `Your active Claude account "${currentName}" (${label}) is at ${pct}% of its ` +
                         `usage window (resets in ${fmtResetsIn(resetsAt)}), which is at or past the ${warningThreshold}% threshold.\n` +
-                        `Before doing further work, consider switching accounts (e.g. /swap or \`claude-juggler next\`).`;
+                        `User should consider switching accounts (e.g. /swap or \`claude-juggler next\`).`;
                     console.log(JSON.stringify({
                         hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
                     }));
