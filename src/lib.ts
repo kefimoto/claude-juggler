@@ -128,7 +128,7 @@ function ensureConfigDir(): void {
   if (!existsSync(ACCOUNTS_FILE)) writeJSON(ACCOUNTS_FILE, {} as AccountsFile);
 }
 
-function getAccountsForCurrentDir(): { [name: string]: AccountData } {
+export function getAccountsForCurrentDir(): { [name: string]: AccountData } {
   ensureConfigDir();
   const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
   return allAccounts[globalClaudeDir] || {};
@@ -459,14 +459,14 @@ export function checkUsageForAccount(account: AccountData): UsageResult {
 
 export function checkUsage(): UsageResult {
   const out = claude("-p /usage --output-format json");
-  let events: any[];
+  let parsed: any;
   try {
-    events = JSON.parse(out);
+    parsed = JSON.parse(out);
   } catch {
     return { pct: null, resetsAt: null };
   }
-  const resultEvent = events.find((e) => e.type === "result");
-  const text: string = resultEvent?.result ?? "";
+
+  const text: string = parsed.result ?? "";
 
   const m =
     /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(

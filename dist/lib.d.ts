@@ -43,6 +43,9 @@ export interface AccountData {
     claudeAiOauth: OauthToken;
     priming?: boolean;
 }
+export declare function getAccountsForCurrentDir(): {
+    [name: string]: AccountData;
+};
 export declare function listAccounts(): string[];
 export declare function withLock<T>(fn: () => T): T;
 /** Which saved account does the LIVE token actually match? null if none. */

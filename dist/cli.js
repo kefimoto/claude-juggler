@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, statusAllInstalls, listAllInstalls, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, isInstalled, setPriming, } from "./lib";
+import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, statusAllInstalls, listAllInstalls, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, isInstalled, setPriming, checkUsage, getAccountsForCurrentDir, } from "./lib";
 function fmtResetsIn(resetsAt) {
     if (!resetsAt)
         return "unknown";
@@ -324,73 +324,69 @@ function main() {
             break;
         }
         case "hook-check": {
-            // Emits the exact JSON a UserPromptSubmit hook needs on stdout: nothing
-            // (silent no-op) when under threshold, or a hookSpecificOutput block
-            // with additionalContext when the active account needs a swap or warning.
-            // On autoswap: actually execute the swap using the configured strategy, then inject context.
-            // Never throws on missing accounts/tooling - a broken check must not break
-            // every turn.
+            // Fast check of active account only (no temp dirs, no checking other accounts)
+            // Just call /usage directly on the active Claude instance
             try {
                 const cfg = getConfig();
-                const rows = statusAll();
-                const active = rows.find((r) => r.active);
-                if (active && active.pct !== null) {
-                    const breakdown = rows
-                        .map((r) => `  - ${r.name} (${r.label}): ${r.pct ?? "?"}% used, resets in ${fmtResetsIn(r.resetsAt)}`)
-                        .join("\n");
-                    // Autoswap if at or above autoswap threshold
-                    if (cfg.autoswapThreshold !== null && active.pct >= cfg.autoswapThreshold) {
-                        // Execute the swap using configured strategy (don't require model interaction)
-                        let targetName;
-                        try {
-                            if (cfg.autoswapStrategy === "next") {
-                                targetName = nextAccount();
-                            }
-                            else if (cfg.autoswapStrategy === "prev") {
-                                targetName = prevAccount();
-                            }
-                            else {
-                                targetName = lowestUsageAccount();
-                            }
-                            withLock(() => activate(targetName, true));
+                const currentName = currentAccount();
+                if (!currentName) {
+                    process.exit(0);
+                    break;
+                }
+                const { pct, resetsAt } = checkUsage();
+                if (pct === null) {
+                    process.exit(0);
+                    break;
+                }
+                const accountsData = getAccountsForCurrentDir();
+                const label = accountsData[currentName]?.label || currentName;
+                // Autoswap if at or above autoswap threshold
+                if (cfg.autoswapThreshold !== null && pct >= cfg.autoswapThreshold) {
+                    let targetName;
+                    try {
+                        if (cfg.autoswapStrategy === "next") {
+                            targetName = nextAccount();
                         }
-                        catch (e) {
-                            // Swap failed, fall back to warning context
-                            const context = `CRITICAL: Your active Claude account "${active.name}" (${active.label}) is at ${active.pct}% usage ` +
-                                `(resets in ${fmtResetsIn(active.resetsAt)}), past the autoswap threshold of ${cfg.autoswapThreshold}%.\n` +
-                                `Autoswap failed; please use /swap or \`claude-juggler next\` to switch manually.\n` +
-                                `All accounts:\n${breakdown}`;
-                            console.log(JSON.stringify({
-                                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-                            }));
-                            process.exit(0);
-                            break;
+                        else if (cfg.autoswapStrategy === "prev") {
+                            targetName = prevAccount();
                         }
-                        // Re-check status after swap to get the new active account
-                        const newRows = statusAll();
-                        const newActive = newRows.find((r) => r.active);
-                        const context = `ACCOUNT SWAPPED: Automatically switched from "${active.name}" (was at ${active.pct}% usage) ` +
-                            `to "${newActive?.name}" (${newActive?.label}) using strategy "${cfg.autoswapStrategy}".\n` +
-                            `All accounts:\n${breakdown}`;
+                        else {
+                            targetName = lowestUsageAccount();
+                        }
+                        withLock(() => activate(targetName, true));
+                    }
+                    catch (e) {
+                        // Swap failed, warn user
+                        const context = `CRITICAL: Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
+                            `(resets in ${fmtResetsIn(resetsAt)}), past the autoswap threshold of ${cfg.autoswapThreshold}%.\n` +
+                            `Autoswap failed; please use /swap or \`claude-juggler next\` to switch manually.`;
                         console.log(JSON.stringify({
                             hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
                         }));
+                        process.exit(0);
+                        break;
                     }
-                    // Warn if at or above warning threshold
-                    else if (active.pct >= cfg.warningThreshold) {
-                        const context = `Your active Claude account "${active.name}" (${active.label}) is at ${active.pct}% of its ` +
-                            `usage window (resets in ${fmtResetsIn(active.resetsAt)}), which is at or past the ${cfg.warningThreshold}% threshold.\n` +
-                            `All accounts:\n${breakdown}\n` +
-                            `Before doing further work, tell the user this and recommend switching accounts ` +
-                            `(e.g. /swap or \`claude-juggler next\`), naming a specific account below threshold if one exists.`;
-                        console.log(JSON.stringify({
-                            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-                        }));
-                    }
+                    // Re-check to get new account info
+                    const newName = currentAccount();
+                    const newLabel = accountsData[newName || ""]?.label || newName || "unknown";
+                    const context = `ACCOUNT SWAPPED: Automatically switched from "${currentName}" (${label}, was at ${pct}% usage) ` +
+                        `to "${newName}" (${newLabel}) using strategy "${cfg.autoswapStrategy}".`;
+                    console.log(JSON.stringify({
+                        hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                    }));
+                }
+                // Warn if at or above warning threshold
+                else if (pct >= cfg.warningThreshold) {
+                    const context = `Your active Claude account "${currentName}" (${label}) is at ${pct}% of its ` +
+                        `usage window (resets in ${fmtResetsIn(resetsAt)}), which is at or past the ${cfg.warningThreshold}% threshold.\n` +
+                        `Before doing further work, consider switching accounts (e.g. /swap or \`claude-juggler next\`).`;
+                    console.log(JSON.stringify({
+                        hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                    }));
                 }
             }
             catch {
-                // no accounts configured yet, or a transient check failure - stay silent
+                // no accounts configured yet, or transient check failure - stay silent
             }
             process.exit(0);
             break;

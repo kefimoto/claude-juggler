@@ -91,7 +91,7 @@ function ensureConfigDir() {
     if (!existsSync(ACCOUNTS_FILE))
         writeJSON(ACCOUNTS_FILE, {});
 }
-function getAccountsForCurrentDir() {
+export function getAccountsForCurrentDir() {
     ensureConfigDir();
     const allAccounts = readJSON(ACCOUNTS_FILE);
     return allAccounts[globalClaudeDir] || {};
@@ -391,15 +391,14 @@ export function checkUsageForAccount(account) {
 }
 export function checkUsage() {
     const out = claude("-p /usage --output-format json");
-    let events;
+    let parsed;
     try {
-        events = JSON.parse(out);
+        parsed = JSON.parse(out);
     }
     catch {
         return { pct: null, resetsAt: null };
     }
-    const resultEvent = events.find((e) => e.type === "result");
-    const text = resultEvent?.result ?? "";
+    const text = parsed.result ?? "";
     const m = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
     if (!m)
         return { pct: null, resetsAt: null };
