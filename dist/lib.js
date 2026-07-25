@@ -472,9 +472,33 @@ export function listAllInstalls() {
         .sort()
         .map(claudeDir => ({
         claudeDir,
-        accountCount: Object.keys(allAccounts[claudeDir] || {}).length,
+        accounts: Object.keys(allAccounts[claudeDir] || {}),
         active: allState[claudeDir]?.active || null,
     }));
+}
+/** Get status (usage + reset time) for all accounts across all installations. */
+export function statusAllInstalls() {
+    ensureConfigDir();
+    if (!existsSync(ACCOUNTS_FILE) || !existsSync(STATE_FILE))
+        return [];
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    const allState = readJSON(STATE_FILE);
+    const results = [];
+    for (const claudeDir of Object.keys(allAccounts).sort()) {
+        const prevDir = globalClaudeDir;
+        try {
+            setClaudeDir(claudeDir);
+            const rows = statusAll();
+            results.push({ claudeDir, accounts: rows });
+        }
+        catch {
+            // Skip installations that can't be checked
+        }
+        finally {
+            setClaudeDir(prevDir);
+        }
+    }
+    return results;
 }
 /** Check if claude-juggler is installed into the current Claude installation. */
 export function isInstalled() {
@@ -488,11 +512,15 @@ export function install(options = {}) {
     const opts = typeof options === "boolean" ? { installCron: options } : options;
     const defaultClaudeDir = join(homedir(), ".claude");
     // Determine if we're in fully non-interactive mode (both --install-cron and --claude-dir set, or --no-cron and --claude-dir set)
-    const isNonInteractive = opts.claudeDir && (opts.noCron || opts.installCron);
+    const isNonInteractive = (opts.claudeDir || globalClaudeDir !== defaultClaudeDir) && (opts.noCron || opts.installCron);
     let claudeDir;
     if (opts.claudeDir) {
         // Explicit CLI flag takes precedence
         claudeDir = opts.claudeDir.replace(/^~/, homedir());
+    }
+    else if (globalClaudeDir !== defaultClaudeDir) {
+        // Use globally set claudeDir if different from default
+        claudeDir = globalClaudeDir;
     }
     else if (!isNonInteractive) {
         // Interactive mode: ask for Claude directory
@@ -513,6 +541,37 @@ export function install(options = {}) {
     // Verify settings.json exists (indicates valid Claude install)
     if (!existsSync(settingsPath)) {
         console.warn(`Warning: ${settingsPath} not found. Claude Code may not be fully initialized.`);
+    }
+    // Auto-import current account if available and not in non-interactive mode
+    if (!isNonInteractive) {
+        try {
+            const claudeJsonPath = join(claudeDir, "claude.json");
+            if (existsSync(claudeJsonPath)) {
+                const liveAcct = readJSON(claudeJsonPath);
+                const email = String(liveAcct.oauthAccount?.emailAddress ?? "");
+                if (email) {
+                    const defaultName = email.split("@")[0] || "default";
+                    const shouldImport = promptYesNo(`\nFound logged-in account: ${email}\nWould you like to save this account? `);
+                    if (shouldImport) {
+                        const accountName = prompt(`What name do you want to save it as? [${defaultName}] `);
+                        const finalName = accountName || defaultName;
+                        // Temporarily set claude dir for addAccount
+                        const prevDir = globalClaudeDir;
+                        setClaudeDir(claudeDir);
+                        try {
+                            addAccount(finalName, undefined);
+                            console.log(`✓ Saved current account as "${finalName}"`);
+                        }
+                        finally {
+                            setClaudeDir(prevDir);
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            // No account found or error reading current account - continue without importing
+        }
     }
     // Determine installation method - check parent process first (bunx/npx), then fall back to global
     let installMethod = "global";

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, listAllInstalls, getAccountsForInstall, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, isInstalled, setPriming, } from "./lib";
+import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, statusAllInstalls, listAllInstalls, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, isInstalled, setPriming, } from "./lib";
 function fmtResetsIn(resetsAt) {
     if (!resetsAt)
         return "unknown";
@@ -10,6 +10,19 @@ function fmtResetsIn(resetsAt) {
         return `${mins}m`;
     return `${Math.floor(mins / 60)}h${mins % 60}m`;
 }
+function fmtUsageBar(pct) {
+    if (pct === null)
+        return "?";
+    const barWidth = 20;
+    const filled = Math.round((pct / 100) * barWidth);
+    let color = "\x1b[32m"; // green
+    if (pct >= 90)
+        color = "\x1b[31m"; // red
+    else if (pct >= 75)
+        color = "\x1b[33m"; // yellow
+    const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
+    return `${color}${bar}\x1b[0m ${pct}%`;
+}
 function printStatusTable() {
     const rows = statusAll();
     if (rows.length === 0) {
@@ -18,8 +31,7 @@ function printStatusTable() {
     }
     for (const r of rows) {
         const marker = r.active ? "*" : " ";
-        const pct = r.pct === null ? "?" : `${r.pct}%`;
-        console.log(`${marker} ${r.name.padEnd(16)} ${r.label.padEnd(28)} ${pct.padStart(4)} used, resets in ${fmtResetsIn(r.resetsAt)}`);
+        console.log(`${marker} ${r.name.padEnd(16)} ${r.label.padEnd(28)} ${fmtUsageBar(r.pct).padEnd(35)} resets in ${fmtResetsIn(r.resetsAt)}`);
     }
 }
 function usage() {
@@ -189,28 +201,34 @@ function main() {
                 break;
             }
             for (const install of installs) {
-                const activeMarker = install.active ? " (active: " + install.active + ")" : "";
-                console.log(`${install.claudeDir}: ${install.accountCount} account${install.accountCount === 1 ? "" : "s"}${activeMarker}`);
+                console.log(`${install.claudeDir}:`);
+                if (install.accounts.length === 0) {
+                    console.log("  (no accounts)");
+                }
+                else {
+                    for (const name of install.accounts) {
+                        const marker = name === install.active ? "*" : " ";
+                        console.log(`  ${marker} ${name}`);
+                    }
+                }
             }
             break;
         }
         case "status-all": {
-            const installs = listAllInstalls();
+            const installs = statusAllInstalls();
             if (installs.length === 0) {
                 console.log("No Claude installations with saved accounts found.");
                 break;
             }
             for (const install of installs) {
                 console.log(`\n${install.claudeDir}:`);
-                const accounts = getAccountsForInstall(install.claudeDir);
-                const active = install.active;
-                if (Object.keys(accounts).length === 0) {
+                if (install.accounts.length === 0) {
                     console.log("  (no accounts)");
                     continue;
                 }
-                for (const [name, data] of Object.entries(accounts)) {
-                    const marker = name === active ? "*" : " ";
-                    console.log(`  ${marker} ${name.padEnd(16)} (${data.label})`);
+                for (const r of install.accounts) {
+                    const marker = r.active ? "*" : " ";
+                    console.log(`  ${marker} ${r.name.padEnd(16)} ${r.label.padEnd(28)} ${fmtUsageBar(r.pct).padEnd(35)} resets in ${fmtResetsIn(r.resetsAt)}`);
                 }
             }
             break;

@@ -27,19 +27,20 @@ claude-juggler install
 ```
 
 This will:
+- Detect and automatically save your currently logged-in account (you'll be prompted for a name)
 - Create `/swap` and `/accounts` Claude Code commands
 - Set up a usage-threshold hook (warns when usage is high)
 - Optionally create a cron job to keep accounts "warm"
 
 **Important**: The installation method you use is remembered. If you run `bunx claude-juggler@beta install`, all future commands (hooks, cron jobs, etc.) will use `bunx claude-juggler@beta`. If you don't specify a version (e.g., `bunx claude-juggler install`), it will automatically use the latest version.
 
-### Set up your accounts
+### Add additional accounts
 
-For each account you want to switch between: log in normally, then save it.
+For each additional account you want to switch between: log in normally, then save it.
 
 ```bash
 claude auth login                    # or /login inside Claude Code
-claude-juggler add personal          # save current account as "personal"
+claude-juggler add work              # save current account as "work"
 ```
 
 Log into your next account (`claude auth logout` then `claude auth login` again) and save it:

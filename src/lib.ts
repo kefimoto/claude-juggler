@@ -539,7 +539,7 @@ export function getAccountsForInstall(claudeDir: string): { [name: string]: Acco
 }
 
 /** List all Claude installations with their account counts. */
-export function listAllInstalls(): Array<{ claudeDir: string; accountCount: number; active: string | null }> {
+export function listAllInstalls(): Array<{ claudeDir: string; accounts: string[]; active: string | null }> {
   ensureConfigDir();
   if (!existsSync(ACCOUNTS_FILE) || !existsSync(STATE_FILE)) return [];
 
@@ -550,9 +550,33 @@ export function listAllInstalls(): Array<{ claudeDir: string; accountCount: numb
     .sort()
     .map(claudeDir => ({
       claudeDir,
-      accountCount: Object.keys(allAccounts[claudeDir] || {}).length,
+      accounts: Object.keys(allAccounts[claudeDir] || {}),
       active: allState[claudeDir]?.active || null,
     }));
+}
+
+/** Get status (usage + reset time) for all accounts across all installations. */
+export function statusAllInstalls(): Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> {
+  ensureConfigDir();
+  if (!existsSync(ACCOUNTS_FILE) || !existsSync(STATE_FILE)) return [];
+
+  const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
+  const allState = readJSON<StateFileData>(STATE_FILE);
+  const results: Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> = [];
+
+  for (const claudeDir of Object.keys(allAccounts).sort()) {
+    const prevDir = globalClaudeDir;
+    try {
+      setClaudeDir(claudeDir);
+      const rows = statusAll();
+      results.push({ claudeDir, accounts: rows });
+    } catch {
+      // Skip installations that can't be checked
+    } finally {
+      setClaudeDir(prevDir);
+    }
+  }
+  return results;
 }
 
 /** Check if claude-juggler is installed into the current Claude installation. */
@@ -576,12 +600,15 @@ export function install(options: InstallOptions | boolean = {}): void {
   const defaultClaudeDir = join(homedir(), ".claude");
 
   // Determine if we're in fully non-interactive mode (both --install-cron and --claude-dir set, or --no-cron and --claude-dir set)
-  const isNonInteractive = opts.claudeDir && (opts.noCron || opts.installCron);
+  const isNonInteractive = (opts.claudeDir || globalClaudeDir !== defaultClaudeDir) && (opts.noCron || opts.installCron);
 
   let claudeDir: string;
   if (opts.claudeDir) {
     // Explicit CLI flag takes precedence
     claudeDir = opts.claudeDir.replace(/^~/, homedir());
+  } else if (globalClaudeDir !== defaultClaudeDir) {
+    // Use globally set claudeDir if different from default
+    claudeDir = globalClaudeDir;
   } else if (!isNonInteractive) {
     // Interactive mode: ask for Claude directory
     const customDir = prompt(`Where is your Claude Code directory? [${defaultClaudeDir}] `);
@@ -602,6 +629,38 @@ export function install(options: InstallOptions | boolean = {}): void {
   // Verify settings.json exists (indicates valid Claude install)
   if (!existsSync(settingsPath)) {
     console.warn(`Warning: ${settingsPath} not found. Claude Code may not be fully initialized.`);
+  }
+
+  // Auto-import current account if available and not in non-interactive mode
+  if (!isNonInteractive) {
+    try {
+      const claudeJsonPath = join(claudeDir, "claude.json");
+      if (existsSync(claudeJsonPath)) {
+        const liveAcct = readJSON<{ oauthAccount: Record<string, unknown> }>(claudeJsonPath);
+        const email = String(liveAcct.oauthAccount?.emailAddress ?? "");
+        if (email) {
+          const defaultName = email.split("@")[0] || "default";
+          const shouldImport = promptYesNo(
+            `\nFound logged-in account: ${email}\nWould you like to save this account? `
+          );
+          if (shouldImport) {
+            const accountName = prompt(`What name do you want to save it as? [${defaultName}] `);
+            const finalName = accountName || defaultName;
+            // Temporarily set claude dir for addAccount
+            const prevDir = globalClaudeDir;
+            setClaudeDir(claudeDir);
+            try {
+              addAccount(finalName, undefined);
+              console.log(`✓ Saved current account as "${finalName}"`);
+            } finally {
+              setClaudeDir(prevDir);
+            }
+          }
+        }
+      }
+    } catch {
+      // No account found or error reading current account - continue without importing
+    }
   }
 
   // Determine installation method - check parent process first (bunx/npx), then fall back to global

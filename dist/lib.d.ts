@@ -98,8 +98,19 @@ export declare function getAccountsForInstall(claudeDir: string): {
 /** List all Claude installations with their account counts. */
 export declare function listAllInstalls(): Array<{
     claudeDir: string;
-    accountCount: number;
+    accounts: string[];
     active: string | null;
+}>;
+/** Get status (usage + reset time) for all accounts across all installations. */
+export declare function statusAllInstalls(): Array<{
+    claudeDir: string;
+    accounts: Array<{
+        name: string;
+        label: string;
+        active: boolean;
+        pct: number | null;
+        resetsAt: number | null;
+    }>;
 }>;
 /** Check if claude-juggler is installed into the current Claude installation. */
 export declare function isInstalled(): boolean;
