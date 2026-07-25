@@ -110,8 +110,8 @@ function main(): void {
 
   const [cmd, ...rest] = args;
 
-  // Check if claude-juggler is installed and warn if not (unless running install/uninstall)
-  if (cmd !== "install" && cmd !== "uninstall" && !isInstalled()) {
+  // Check if claude-juggler is installed and warn if not (unless running install/uninstall/version)
+  if (cmd !== "install" && cmd !== "uninstall" && cmd !== "version" && !isInstalled()) {
     console.warn("\n⚠️  claude-juggler is not installed in Claude Code yet.");
     console.warn("   Run `claude-juggler install` to enable:");
     console.warn("   • /swap and /accounts commands in Claude Code");
