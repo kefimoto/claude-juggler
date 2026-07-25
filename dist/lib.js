@@ -20,13 +20,44 @@ import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
-export const CONFIG_DIR = process.env.CLAUDE_ACCOUNT_SWAP_DIR || join(homedir(), ".claude-account-swap");
+export const CONFIG_DIR = process.env.CLAUDE_JUGGLER_DIR || join(homedir(), ".claude-juggler");
 export const ACCOUNTS_DIR = join(CONFIG_DIR, "accounts");
 export const STATE_PATH = join(CONFIG_DIR, "state.json");
+export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const LOG_PATH = join(CONFIG_DIR, "prime.log");
 const LOCK_DIR = join(CONFIG_DIR, ".lock.d");
 const CREDS_PATH = join(homedir(), ".claude/.credentials.json");
 const CLAUDE_JSON_PATH = join(homedir(), ".claude.json");
+function readConfig() {
+    if (!existsSync(CONFIG_PATH))
+        return { warningThreshold: 95, autoswapThreshold: 99, autoswapStrategy: "lowest" };
+    return readJSON(CONFIG_PATH);
+}
+function writeConfig(config) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    writeJSON(CONFIG_PATH, config);
+}
+export function getConfig() {
+    const cfg = readConfig();
+    return {
+        warningThreshold: cfg.warningThreshold ?? 95,
+        autoswapThreshold: cfg.autoswapThreshold === undefined ? 99 : cfg.autoswapThreshold,
+        autoswapStrategy: cfg.autoswapStrategy ?? "lowest",
+    };
+}
+export function setThresholds(warning, autoswap, strategy) {
+    const cfg = readConfig();
+    if (warning !== undefined)
+        cfg.warningThreshold = warning;
+    if (autoswap !== undefined)
+        cfg.autoswapThreshold = autoswap;
+    if (strategy !== undefined)
+        cfg.autoswapStrategy = strategy;
+    writeConfig(cfg);
+    const final = getConfig();
+    const swapStr = final.autoswapThreshold === null ? "disabled" : `${final.autoswapThreshold}% (${final.autoswapStrategy})`;
+    console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}`);
+}
 function readJSON(path) {
     return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -191,6 +222,27 @@ export function nextAccount() {
     const idx = current ? accounts.indexOf(current) : -1;
     return accounts[(idx + 1) % accounts.length];
 }
+export function prevAccount() {
+    const accounts = listAccounts();
+    if (accounts.length === 0)
+        throw new Error("No accounts saved yet. Run `add <name>` first.");
+    const current = currentAccount();
+    const idx = current ? accounts.indexOf(current) : -1;
+    return accounts[(idx - 1 + accounts.length) % accounts.length];
+}
+export function lowestUsageAccount() {
+    const rows = statusAll();
+    if (rows.length === 0)
+        throw new Error("No accounts saved yet. Run `add <name>` first.");
+    let lowest = rows[0];
+    for (const r of rows) {
+        const rPct = r.pct ?? 100;
+        const lowPct = lowest.pct ?? 100;
+        if (rPct < lowPct)
+            lowest = r;
+    }
+    return lowest.name;
+}
 function claude(args) {
     // bash -lc sources shell rc files (nvm init etc.) so `claude` resolves
     // under cron's minimal PATH, not just interactively.
@@ -316,4 +368,88 @@ export function statusAll() {
         }
         return results;
     });
+}
+/** Setup Claude Code integration: create commands and configure hook. */
+export function setup() {
+    const claudeDir = join(homedir(), ".claude");
+    const commandsDir = join(claudeDir, "commands");
+    const settingsPath = join(claudeDir, "settings.json");
+    // Determine hook script path: find the package root by walking up from this file
+    let pkgRoot = __dirname;
+    while (!existsSync(join(pkgRoot, "package.json"))) {
+        const parent = join(pkgRoot, "..");
+        if (parent === pkgRoot)
+            throw new Error("Could not find package root");
+        pkgRoot = parent;
+    }
+    const hookScript = join(pkgRoot, "claude/hooks/check-usage-hook.sh");
+    if (!existsSync(hookScript))
+        throw new Error(`Hook script not found at ${hookScript}`);
+    // Create commands directory if needed
+    mkdirSync(commandsDir, { recursive: true });
+    // Write swap command
+    const swapCmd = `---
+description: Swap the active Claude account
+allowed-tools: Bash(claude-juggler:*)
+---
+
+!\`claude-juggler status\`
+
+If no accounts are shown, tell the user to run:
+\`claude-juggler add <name>\` (right after logging into another account with \`claude auth login\`)
+
+Otherwise, ask the user (AskUserQuestion) how they want to swap:
+- "Next" → run \`claude-juggler next\`
+- "Previous" → run \`claude-juggler prev\`
+- "Lowest usage" → run \`claude-juggler lowest\`
+- Specific account name → run \`claude-juggler use <name>\`
+
+Once the swap completes, tell the user:
+1. That the swap succeeded, naming the new account.
+2. What email address currently appears in your own system prompt/context
+   (the "userEmail" field, if present) — state it plainly, verbatim.
+3. Whether it matches. If it does NOT match, note that the token swaps
+   immediately (governs billing/rate limits), but Claude Code's identity
+   cache can lag behind.
+`;
+    writeFileSync(join(commandsDir, "swap.md"), swapCmd);
+    // Write accounts command
+    const accountsCmd = `---
+description: Show all saved accounts' usage % and time-to-reset
+allowed-tools: Bash(claude-juggler status:*)
+---
+
+!\`claude-juggler status\`
+
+Present the table above to the user in plain language: which account is
+currently active (marked with *), and each account's usage % and time until
+its window resets. If any account is empty (no accounts saved), tell the
+user to run \`claude-juggler add <name>\` after logging in.
+`;
+    writeFileSync(join(commandsDir, "accounts.md"), accountsCmd);
+    // Update settings.json hook
+    let settings = {};
+    if (existsSync(settingsPath)) {
+        settings = readJSON(settingsPath);
+    }
+    if (!settings.hooks)
+        settings.hooks = {};
+    if (!settings.hooks.UserPromptSubmit)
+        settings.hooks.UserPromptSubmit = [{ hooks: [] }];
+    const hookEntry = settings.hooks.UserPromptSubmit[0];
+    if (!hookEntry.hooks)
+        hookEntry.hooks = [];
+    // Remove any existing claude-juggler hook
+    hookEntry.hooks = hookEntry.hooks.filter((h) => !h.command || !h.command.includes("check-usage-hook"));
+    // Add the hook
+    hookEntry.hooks.push({
+        type: "command",
+        command: hookScript,
+        timeout: 10,
+    });
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    console.log("✓ Created ~/.claude/commands/swap.md");
+    console.log("✓ Created ~/.claude/commands/accounts.md");
+    console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookScript}`);
+    console.log("\nSetup complete! Use /swap and /accounts in Claude Code, or run: claude-juggler [add|list|use|status]");
 }

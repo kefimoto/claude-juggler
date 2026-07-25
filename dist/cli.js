@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prime, statusAll, verifyStatus, withLock, } from "./lib";
+import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, setup, statusAll, verifyStatus, withLock, getConfig, setThresholds, } from "./lib";
 function fmtResetsIn(resetsAt) {
     if (!resetsAt)
         return "unknown";
@@ -13,7 +13,7 @@ function fmtResetsIn(resetsAt) {
 function printStatusTable() {
     const rows = statusAll();
     if (rows.length === 0) {
-        console.log("No accounts saved yet. Run: claude-account-swap add <name>");
+        console.log("No accounts saved yet. Run: claude-juggler add <name>");
         return;
     }
     for (const r of rows) {
@@ -23,23 +23,33 @@ function printStatusTable() {
     }
 }
 function usage() {
-    console.error(`claude-account-swap - switch between multiple Claude Code accounts
+    console.error(`claude-juggler - switch between multiple Claude Code accounts
 
 Usage:
-  claude-account-swap add <name>       Save the CURRENTLY LOGGED IN account as <name>
+  claude-juggler add <name>            Save the CURRENTLY LOGGED IN account as <name>
                                         (run this right after \`claude auth login\`)
-  claude-account-swap remove <name>    Forget a saved account (must not be active)
-  claude-account-swap list             List saved account names
-  claude-account-swap status           Show all accounts' usage % and time-to-reset
-  claude-account-swap use <name>       Switch to a specific account
-  claude-account-swap next             Switch to the next account in rotation
-  claude-account-swap current          Print the currently active account name
-  claude-account-swap prime            Check every account; ping any at 0% used
+  claude-juggler remove <name>         Forget a saved account (must not be active)
+  claude-juggler list                  List saved account names
+  claude-juggler status                Show all accounts' usage % and time-to-reset
+  claude-juggler use <name>            Switch to a specific account
+  claude-juggler next                  Switch to the next account in rotation
+  claude-juggler prev                  Switch to the previous account in rotation
+  claude-juggler lowest                Switch to the lowest-usage account
+  claude-juggler current               Print the currently active account name
+  claude-juggler setup                 Configure /swap and /accounts Claude Code
+                                        commands and usage-threshold hook
+  claude-juggler config [show|set-warning|set-autoswap|set-strategy]
+                                        View or edit warning/autoswap thresholds
+                                        show: display current config
+                                        set-warning <pct>: set warning threshold
+                                        set-autoswap <pct|off>: set autoswap or disable
+                                        set-strategy <next|prev|lowest>: set autoswap behavior
+  claude-juggler prime                 Check every account; ping any at 0% used
                                         so its 5h window starts ticking (for cron)
-  claude-account-swap check-threshold [pct]
+  claude-juggler check-threshold [pct]
                                         Exit 1 and print a warning if the active
                                         account's usage is >= pct (default 95)
-  claude-account-swap hook-check [pct] For use as a UserPromptSubmit hook: prints
+  claude-juggler hook-check [pct]      For use as a UserPromptSubmit hook: prints
                                         additionalContext JSON when past threshold,
                                         nothing otherwise. Never throws.
 `);
@@ -87,6 +97,16 @@ function main() {
             withLock(() => activate(nextAccount()));
             verifyStatus();
             break;
+        case "prev": {
+            withLock(() => activate(prevAccount()));
+            verifyStatus();
+            break;
+        }
+        case "lowest": {
+            withLock(() => activate(lowestUsageAccount()));
+            verifyStatus();
+            break;
+        }
         case "current": {
             const name = currentAccount();
             console.log(name ?? "(none)");
@@ -95,6 +115,47 @@ function main() {
         case "prime":
             prime();
             break;
+        case "setup":
+            setup();
+            break;
+        case "config": {
+            const subCmd = rest[0];
+            if (!subCmd || subCmd === "show") {
+                const cfg = getConfig();
+                console.log(`warningThreshold: ${cfg.warningThreshold}%`);
+                console.log(`autoswapThreshold: ${cfg.autoswapThreshold === null ? "disabled" : cfg.autoswapThreshold + "%"}`);
+                console.log(`autoswapStrategy: ${cfg.autoswapStrategy}`);
+            }
+            else if (subCmd === "set-warning") {
+                const val = Number(rest[1]);
+                if (isNaN(val) || val < 0 || val > 100) {
+                    console.error("Warning threshold must be 0-100");
+                    process.exit(1);
+                }
+                setThresholds(val);
+            }
+            else if (subCmd === "set-autoswap") {
+                const val = rest[1] === "off" ? null : Number(rest[1]);
+                if (val !== null && (isNaN(val) || val < 0 || val > 100)) {
+                    console.error("Autoswap threshold must be 0-100 or 'off'");
+                    process.exit(1);
+                }
+                setThresholds(undefined, val);
+            }
+            else if (subCmd === "set-strategy") {
+                const strat = rest[1];
+                if (!["next", "prev", "lowest"].includes(strat)) {
+                    console.error("Strategy must be: next, prev, or lowest");
+                    process.exit(1);
+                }
+                setThresholds(undefined, undefined, strat);
+            }
+            else {
+                console.error("Unknown config subcommand. Use: show, set-warning, set-autoswap, set-strategy");
+                process.exit(1);
+            }
+            break;
+        }
         case "check-threshold": {
             const threshold = rest[0] ? Number(rest[0]) : 95;
             const rows = statusAll();
@@ -113,25 +174,38 @@ function main() {
         case "hook-check": {
             // Emits the exact JSON a UserPromptSubmit hook needs on stdout: nothing
             // (silent no-op) when under threshold, or a hookSpecificOutput block
-            // with additionalContext when the active account needs a swap. Never
-            // throws on missing accounts/tooling - a broken check must not break
+            // with additionalContext when the active account needs a swap or warning.
+            // Never throws on missing accounts/tooling - a broken check must not break
             // every turn.
-            const threshold = rest[0] ? Number(rest[0]) : 95;
             try {
+                const cfg = getConfig();
                 const rows = statusAll();
                 const active = rows.find((r) => r.active);
-                if (active && active.pct !== null && active.pct >= threshold) {
+                if (active && active.pct !== null) {
                     const breakdown = rows
                         .map((r) => `  - ${r.name} (${r.label}): ${r.pct ?? "?"}% used, resets in ${fmtResetsIn(r.resetsAt)}`)
                         .join("\n");
-                    const context = `Your active Claude account "${active.name}" (${active.label}) is at ${active.pct}% of its ` +
-                        `usage window (resets in ${fmtResetsIn(active.resetsAt)}), which is past the ${threshold}% threshold.\n` +
-                        `All accounts:\n${breakdown}\n` +
-                        `Before doing further work, tell the user this and recommend switching accounts ` +
-                        `(e.g. /swap or \`claude-account-swap next\`), naming a specific account below threshold if one exists.`;
-                    console.log(JSON.stringify({
-                        hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-                    }));
+                    // Autoswap if at or above autoswap threshold
+                    if (cfg.autoswapThreshold !== null && active.pct >= cfg.autoswapThreshold) {
+                        const context = `CRITICAL: Your active Claude account "${active.name}" (${active.label}) is at ${active.pct}% usage ` +
+                            `(resets in ${fmtResetsIn(active.resetsAt)}), past the autoswap threshold of ${cfg.autoswapThreshold}%.\n` +
+                            `Execute /swap immediately with strategy "${cfg.autoswapStrategy}" to switch accounts automatically.\n` +
+                            `All accounts:\n${breakdown}`;
+                        console.log(JSON.stringify({
+                            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                        }));
+                    }
+                    // Warn if at or above warning threshold
+                    else if (active.pct >= cfg.warningThreshold) {
+                        const context = `Your active Claude account "${active.name}" (${active.label}) is at ${active.pct}% of its ` +
+                            `usage window (resets in ${fmtResetsIn(active.resetsAt)}), which is at or past the ${cfg.warningThreshold}% threshold.\n` +
+                            `All accounts:\n${breakdown}\n` +
+                            `Before doing further work, tell the user this and recommend switching accounts ` +
+                            `(e.g. /swap or \`claude-juggler next\`), naming a specific account below threshold if one exists.`;
+                        console.log(JSON.stringify({
+                            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                        }));
+                    }
                 }
             }
             catch {

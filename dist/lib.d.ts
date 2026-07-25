@@ -18,7 +18,19 @@
 export declare const CONFIG_DIR: string;
 export declare const ACCOUNTS_DIR: string;
 export declare const STATE_PATH: string;
+export declare const CONFIG_PATH: string;
 export declare const LOG_PATH: string;
+export interface Config {
+    warningThreshold?: number;
+    autoswapThreshold?: number | null;
+    autoswapStrategy?: "next" | "prev" | "lowest";
+}
+export declare function getConfig(): {
+    warningThreshold: number;
+    autoswapThreshold: number | null;
+    autoswapStrategy: "next" | "prev" | "lowest";
+};
+export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest"): void;
 export interface OauthToken {
     accessToken: string;
     [key: string]: unknown;
@@ -46,6 +58,8 @@ export declare function removeAccount(name: string): void;
 export declare function activate(targetName: string, quiet?: boolean): string;
 /** Pick the "next" account in rotation after the current one. */
 export declare function nextAccount(): string;
+export declare function prevAccount(): string;
+export declare function lowestUsageAccount(): string;
 export declare function verifyStatus(): void;
 export interface UsageResult {
     pct: number | null;
@@ -67,3 +81,5 @@ export declare function statusAll(): Array<{
     pct: number | null;
     resetsAt: number | null;
 }>;
+/** Setup Claude Code integration: create commands and configure hook. */
+export declare function setup(): void;
