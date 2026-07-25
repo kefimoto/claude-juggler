@@ -89,6 +89,14 @@ function readState() {
     return readJSON(STATE_PATH);
 }
 // Exclusive lock via atomic mkdir (portable, no native flock binding needed).
+function sleep(ms) {
+    if (typeof globalThis.Bun !== "undefined") {
+        globalThis.Bun.sleepSync(ms);
+    }
+    else {
+        execFileSync("sleep", [String(ms / 1000)]);
+    }
+}
 export function withLock(fn) {
     ensureConfigDir();
     const deadline = Date.now() + 30_000;
@@ -102,7 +110,7 @@ export function withLock(fn) {
                 throw e;
             if (Date.now() > deadline)
                 throw new Error("Timed out waiting for account lock");
-            Bun.sleepSync(100);
+            sleep(100);
         }
     }
     try {

@@ -120,6 +120,14 @@ function readState(): StateFile {
 }
 
 // Exclusive lock via atomic mkdir (portable, no native flock binding needed).
+function sleep(ms: number): void {
+  if (typeof (globalThis as any).Bun !== "undefined") {
+    (globalThis as any).Bun.sleepSync(ms);
+  } else {
+    execFileSync("sleep", [String(ms / 1000)]);
+  }
+}
+
 export function withLock<T>(fn: () => T): T {
   ensureConfigDir();
   const deadline = Date.now() + 30_000;
@@ -130,7 +138,7 @@ export function withLock<T>(fn: () => T): T {
     } catch (e: any) {
       if (e.code !== "EEXIST") throw e;
       if (Date.now() > deadline) throw new Error("Timed out waiting for account lock");
-      Bun.sleepSync(100);
+      sleep(100);
     }
   }
   try {
