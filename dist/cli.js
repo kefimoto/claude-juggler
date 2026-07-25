@@ -82,9 +82,11 @@ Commands:
                            so its 5h window starts ticking (for cron)
   check-threshold [pct]    Exit 1 and print a warning if the active
                            account's usage is >= pct (default 95)
-  hook-check [pct]         For use as a UserPromptSubmit hook: prints
+  hook-check [warn-pct] [autoswap-pct]
+                           For use as a UserPromptSubmit hook: prints
                            additionalContext JSON when past threshold,
                            nothing otherwise. Never throws.
+                           Optional args override config thresholds.
 `);
 }
 function main() {
@@ -340,8 +342,11 @@ function main() {
                 }
                 const accountsData = getAccountsForCurrentDir();
                 const label = accountsData[currentName]?.label || currentName;
+                // Parse optional threshold arguments (default to config values)
+                const warningThreshold = rest[0] ? Number(rest[0]) : cfg.warningThreshold;
+                const autoswapThreshold = rest[1] ? Number(rest[1]) : cfg.autoswapThreshold;
                 // Autoswap if at or above autoswap threshold
-                if (cfg.autoswapThreshold !== null && pct >= cfg.autoswapThreshold) {
+                if (autoswapThreshold !== null && pct >= autoswapThreshold) {
                     let targetName;
                     try {
                         if (cfg.autoswapStrategy === "next") {
@@ -358,7 +363,7 @@ function main() {
                     catch (e) {
                         // Swap failed, warn user
                         const context = `CRITICAL: Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
-                            `(resets in ${fmtResetsIn(resetsAt)}), past the autoswap threshold of ${cfg.autoswapThreshold}%.\n` +
+                            `(resets in ${fmtResetsIn(resetsAt)}), past the autoswap threshold of ${autoswapThreshold}%.\n` +
                             `Autoswap failed; please use /swap or \`claude-juggler next\` to switch manually.`;
                         console.log(JSON.stringify({
                             hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
@@ -376,9 +381,9 @@ function main() {
                     }));
                 }
                 // Warn if at or above warning threshold
-                else if (pct >= cfg.warningThreshold) {
+                else if (pct >= warningThreshold) {
                     const context = `Your active Claude account "${currentName}" (${label}) is at ${pct}% of its ` +
-                        `usage window (resets in ${fmtResetsIn(resetsAt)}), which is at or past the ${cfg.warningThreshold}% threshold.\n` +
+                        `usage window (resets in ${fmtResetsIn(resetsAt)}), which is at or past the ${warningThreshold}% threshold.\n` +
                         `Before doing further work, consider switching accounts (e.g. /swap or \`claude-juggler next\`).`;
                     console.log(JSON.stringify({
                         hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },

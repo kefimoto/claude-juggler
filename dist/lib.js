@@ -398,7 +398,17 @@ export function checkUsage() {
     catch {
         return { pct: null, resetsAt: null };
     }
-    const text = parsed.result ?? "";
+    // Handle both array format (new) and single object format (old)
+    let text = "";
+    if (Array.isArray(parsed)) {
+        // New array format: find the result object
+        const resultObj = parsed.find((item) => item.type === "result");
+        text = resultObj?.result ?? "";
+    }
+    else {
+        // Old single-object format
+        text = parsed.result ?? "";
+    }
     const m = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
     if (!m)
         return { pct: null, resetsAt: null };
