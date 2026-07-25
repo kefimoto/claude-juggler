@@ -774,9 +774,13 @@ export function uninstall() {
     if (existsSync(settingsPath)) {
         let settings = readJSON(settingsPath);
         if (settings.hooks?.UserPromptSubmit?.[0]?.hooks) {
+            const originalLength = settings.hooks.UserPromptSubmit[0].hooks.length;
             settings.hooks.UserPromptSubmit[0].hooks = settings.hooks.UserPromptSubmit[0].hooks.filter((h) => !h.command || !h.command.includes("hook-check"));
-            writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-            console.log(`✓ Removed hook from ${displayDir}/settings.json`);
+            const newLength = settings.hooks.UserPromptSubmit[0].hooks.length;
+            if (originalLength > newLength) {
+                writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+                console.log(`✓ Removed hook from ${displayDir}/settings.json`);
+            }
         }
     }
     // Remove cron job for this specific installation
