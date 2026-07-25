@@ -1,11 +1,12 @@
 {
-  "name": "claude-accounts",
-  "version": "0.1.0",
+  "name": "polyclaude",
+  "version": "1.0.0",
   "description": "Switch between multiple Claude Code accounts instantly, in-session, no browser required. CLI + Claude Code commands + optional auto-stop-at-threshold hook.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "claude-accounts": "./dist/cli.js"
+    "polyclaude": "./dist/cli.js",
+    "pc": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
