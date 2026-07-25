@@ -1,4 +1,4 @@
-# claude-account-swap
+# claude-accounts
 
 Switch between multiple Claude Code accounts instantly, in the same session,
 no browser required. Built after discovering that Claude Code's own account
@@ -6,7 +6,7 @@ identity lives in two files on disk (`~/.claude/.credentials.json` for the
 OAuth token, `~/.claude.json` for a display-only identity cache) and that
 swapping the token takes effect **live**, even mid-conversation.
 
-- **CLI**: `claude-account-swap` — works standalone, outside Claude Code too.
+- **CLI**: `claude-accounts` — works standalone, outside Claude Code too.
 - **Claude Code commands**: `/swap`, `/accounts`.
 - **Optional hook**: automatically warns you (and recommends a swap) once
   your active account crosses a usage threshold (default 95%).
@@ -16,7 +16,7 @@ swapping the token takes effect **live**, even mid-conversation.
 ## How it works
 
 Claude Code stores your OAuth token and a separate identity cache. This tool
-saves a copy of each account's token under `~/.claude-account-swap/accounts/`
+saves a copy of each account's token under `~/.claude-accounts/accounts/`
 and, on swap, does a careful read-modify-write of just the token field in
 both live files — never a full overwrite, and it aborts loudly instead of
 silently corrupting an account if its bookkeeping and the real live token
@@ -35,9 +35,9 @@ turn or two.
 Requires [Bun](https://bun.sh).
 
 ```bash
-git clone <this-repo> ~/claude-account-swap
-cd ~/claude-account-swap
-bun link   # makes `claude-account-swap` available on your PATH
+git clone <this-repo> ~/claude-accounts
+cd ~/claude-accounts
+bun link   # makes `claude-accounts` available on your PATH
 ```
 
 ### Set up your accounts
@@ -46,14 +46,14 @@ For each account you want to switch between: log in normally, then save it.
 
 ```bash
 claude auth login          # or /login inside a Claude Code session
-claude-account-swap add personal
+claude-accounts add personal
 ```
 
 Log into your next account (`claude auth logout` then `claude auth login`
 again) and save it under a different name:
 
 ```bash
-claude-account-swap add work
+claude-accounts add work
 ```
 
 Repeat for as many accounts as you have. Names can be anything
@@ -62,11 +62,11 @@ alphanumeric (`personal`, `work`, `client-a`, ...).
 ### CLI usage
 
 ```bash
-claude-account-swap list              # saved account names
-claude-account-swap status            # usage % + time-to-reset for all of them
-claude-account-swap use work          # switch to a specific account
-claude-account-swap next              # rotate to the next one
-claude-account-swap current           # which one is active right now
+claude-accounts list              # saved account names
+claude-accounts status            # usage % + time-to-reset for all of them
+claude-accounts use work          # switch to a specific account
+claude-accounts next              # rotate to the next one
+claude-accounts current           # which one is active right now
 ```
 
 ### Claude Code commands
@@ -98,7 +98,7 @@ already have a `hooks` key):
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claude-account-swap/claude/hooks/check-usage-hook.sh",
+            "command": "/absolute/path/to/claude-accounts/claude/hooks/check-usage-hook.sh",
             "timeout": 10
           }
         ]
@@ -123,10 +123,10 @@ infrequently-used accounts' refresh tokens exercised so they don't expire.
 Add to cron (adjust the path):
 
 ```
-*/20 * * * * /absolute/path/to/claude-account-swap/bin/prime-cron.sh
+*/20 * * * * /absolute/path/to/claude-accounts/bin/prime-cron.sh
 ```
 
-Cron runs jobs with a minimal `PATH` — no `bun`, no `claude-account-swap`.
+Cron runs jobs with a minimal `PATH` — no `bun`, no `claude-accounts`.
 Don't point cron directly at `src/cli.ts`; its `#!/usr/bin/env bun` shebang
 needs `bun` on `PATH` just to start the process, which a bare cron
 environment doesn't have. `bin/prime-cron.sh` runs everything through a login
@@ -136,7 +136,7 @@ shell does (as long as your `.bashrc`/`.zshrc` is what puts `bun` and
 
 ## Config location
 
-Everything lives under `~/.claude-account-swap/` (override with the
+Everything lives under `~/.claude-accounts/` (override with the
 `CLAUDE_ACCOUNT_SWAP_DIR` environment variable): one JSON file per saved
 account, `state.json` tracking which is active, and `prime.log` for the
 priming cron job's history. Account files hold real OAuth tokens — they're
