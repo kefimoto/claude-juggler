@@ -22,12 +22,16 @@ Claude Code stores your OAuth token and a separate identity cache. This tool sav
 bunx claude-juggler@beta install
 # or
 npx claude-juggler@beta install
+# or (if globally installed)
+claude-juggler install
 ```
 
 This will:
 - Create `/swap` and `/accounts` Claude Code commands
 - Set up a usage-threshold hook (warns when usage is high)
 - Optionally create a cron job to keep accounts "warm"
+
+**Important**: The installation method you use is remembered. If you run `bunx claude-juggler@beta install`, all future commands (hooks, cron jobs, etc.) will use `bunx claude-juggler@beta`. If you don't specify a version (e.g., `bunx claude-juggler install`), it will automatically use the latest version.
 
 ### Set up your accounts
 
