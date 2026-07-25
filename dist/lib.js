@@ -922,11 +922,13 @@ export function uninstall() {
     // Remove cron job for this specific installation
     removeCronForInstall(claudeDir);
     // Remove account storage for this installation ONLY (not the global config)
-    const allAccounts = readJSON(ACCOUNTS_FILE);
-    if (allAccounts[claudeDir]) {
-        delete allAccounts[claudeDir];
-        writeJSON(ACCOUNTS_FILE, allAccounts);
-        console.log(`✓ Removed account storage for this installation`);
+    if (existsSync(ACCOUNTS_FILE)) {
+        const allAccounts = readJSON(ACCOUNTS_FILE);
+        if (allAccounts[claudeDir]) {
+            delete allAccounts[claudeDir];
+            writeJSON(ACCOUNTS_FILE, allAccounts);
+            console.log(`✓ Removed account storage for this installation`);
+        }
     }
     console.log("\nUninstall complete!");
 }

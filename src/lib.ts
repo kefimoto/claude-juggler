@@ -1028,11 +1028,13 @@ export function uninstall(): void {
   removeCronForInstall(claudeDir);
 
   // Remove account storage for this installation ONLY (not the global config)
-  const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
-  if (allAccounts[claudeDir]) {
-    delete allAccounts[claudeDir];
-    writeJSON(ACCOUNTS_FILE, allAccounts);
-    console.log(`✓ Removed account storage for this installation`);
+  if (existsSync(ACCOUNTS_FILE)) {
+    const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
+    if (allAccounts[claudeDir]) {
+      delete allAccounts[claudeDir];
+      writeJSON(ACCOUNTS_FILE, allAccounts);
+      console.log(`✓ Removed account storage for this installation`);
+    }
   }
 
   console.log("\nUninstall complete!");
