@@ -54,7 +54,8 @@ Commands:
                            Options:
                              --install-cron: setup cron job
                              --no-cron: don't setup cron job
-  uninstall                Remove Claude Code integration and config
+  uninstall                Remove Claude Code integration for current installation
+  uninstall-all            Remove Claude Code integration for all installations
   config [show|set-warning|set-autoswap|set-strategy]
                            View or edit warning/autoswap thresholds
                            show: display current config
@@ -218,6 +219,19 @@ function main() {
         case "uninstall":
             uninstall();
             break;
+        case "uninstall-all": {
+            const installs = listAllInstalls();
+            if (installs.length === 0) {
+                console.log("No Claude installations with saved accounts found.");
+                break;
+            }
+            for (const install of installs) {
+                setClaudeDir(install.claudeDir);
+                console.log(`Uninstalling from ${install.claudeDir}...`);
+                uninstall();
+            }
+            break;
+        }
         case "config": {
             const subCmd = rest[0];
             if (!subCmd || subCmd === "show") {

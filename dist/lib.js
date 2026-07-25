@@ -624,8 +624,8 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
     const hookEntry = settings.hooks.UserPromptSubmit[0];
     if (!hookEntry.hooks)
         hookEntry.hooks = [];
-    // Remove any existing claude-juggler hook
-    hookEntry.hooks = hookEntry.hooks.filter((h) => !h.command || !h.command.includes("check-usage-hook"));
+    // Remove any existing claude-juggler hooks (any variation: claude-juggler, npx, bunx, with or without --claude-dir)
+    hookEntry.hooks = hookEntry.hooks.filter((h) => !h.command || !(h.command.includes("hook-check") && (h.command.includes("claude-juggler") || h.command.includes("npx") || h.command.includes("bunx"))));
     // Add the hook using portable command prefix, not file path
     // Include --claude-dir if not default installation so hook knows which install to check
     const hookCommand = claudeDir === defaultClaudeDir
@@ -692,16 +692,11 @@ function setupCronForInstall(command, claudeDir) {
             // No existing crontab
             crontab = "";
         }
-        // Check if already exists for this specific installation
-        // For default ~/.claude, check for "prime" without --claude-dir
-        // For custom, check for the specific command with --claude-dir
-        const defaultClaudeDir = join(homedir(), ".claude");
-        const isDefault = claudeDir === defaultClaudeDir;
-        const searchPattern = isDefault
-            ? /claude-juggler prime|bunx claude-juggler.*prime|npx claude-juggler.*prime/
-            : new RegExp(`claude-dir.*"${claudeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}".*prime|${command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+        // Check if the exact command already exists in crontab
+        const escapedCommand = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchPattern = new RegExp(escapedCommand);
         if (searchPattern.test(crontab)) {
-            return; // Already configured for this installation
+            return; // Already configured
         }
         // Add new cron entry
         const newEntry = `*/20 * * * * ${command}\n`;
