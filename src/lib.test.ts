@@ -300,3 +300,232 @@ describe("Error Handling", () => {
     expect(output).toContain("No account");
   });
 });
+
+describe("Load Balancing Configuration", () => {
+  beforeEach(() => {
+    createMockClaude(TEST_CLAUDE_1, "user1@example.com", "token-1");
+    createMockClaude(TEST_CLAUDE_2, "user2@example.com", "token-2");
+  });
+
+  it("should configure load balancing strategy", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "drain-near-reset"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const output = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(output).toContain("drain-near-reset");
+  });
+
+  it("should configure load balancing interval", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "smart-lowest"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-interval", "300"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const output = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(output).toContain("300");
+  });
+
+  it("should configure load balancing delta threshold", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "smart-lowest"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-delta", "10"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const output = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(output).toContain("10");
+  });
+
+  it("should disable load balancing with off strategy", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "drain-near-reset"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "off"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const output = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(output).toContain("loadBalancingStrategy: off");
+  });
+});
+
+describe("Load Balancing Strategy (drain-near-reset)", () => {
+  beforeEach(() => {
+    createMockClaude(TEST_CLAUDE_1, "user1@example.com", "token-1");
+  });
+
+  it("should prioritize unstarted windows (null resetsAt)", () => {
+    // Add two accounts
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account2", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    // Enable load balancing
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "drain-near-reset"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    // Verify both accounts exist and one is active
+    const status = runCLI(["--claude-dir", TEST_CLAUDE_1, "status"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(status).toContain("account1");
+    expect(status).toContain("account2");
+  });
+
+  it("should respect autoswap enable/disable per account", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "primary", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "secondary", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    // Disable autoswap on secondary
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "set-autoswap-enabled", "secondary", "off"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    // Verify it's disabled
+    const status = runCLI(["--claude-dir", TEST_CLAUDE_1, "list"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(status).toContain("primary");
+    expect(status).toContain("secondary");
+  });
+
+  it("should allow re-enabling autoswap", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "test", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "set-autoswap-enabled", "test", "off"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "set-autoswap-enabled", "test", "on"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const status = runCLI(["--claude-dir", TEST_CLAUDE_1, "list"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(status).toContain("test");
+  });
+
+  it("should require min-interval between swaps (default 600s)", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account2", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "smart-lowest"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const cfg = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(cfg).toContain("600");
+  });
+
+  it("should allow customizing min-interval", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "smart-lowest"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-interval", "120"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const cfg = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(cfg).toContain("120");
+  });
+
+  it("should require min-delta between usage (default 5%)", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "smart-lowest"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const cfg = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(cfg).toContain("5");
+  });
+
+  it("should allow customizing min-delta", () => {
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "add", "account1", "--no-priming"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-strategy", "smart-lowest"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "set-lb-delta", "15"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    const cfg = runCLI(["--claude-dir", TEST_CLAUDE_1, "config", "show"], {
+      CLAUDE_JUGGLER_DIR: TEST_CONFIG_DIR,
+    });
+
+    expect(cfg).toContain("15");
+  });
+});
