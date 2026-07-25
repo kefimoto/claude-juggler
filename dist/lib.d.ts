@@ -99,6 +99,8 @@ export declare function listAllInstalls(): Array<{
     accountCount: number;
     active: string | null;
 }>;
+/** Check if claude-juggler is installed into the current Claude installation. */
+export declare function isInstalled(): boolean;
 interface InstallOptions {
     installCron?: boolean;
     noCron?: boolean;

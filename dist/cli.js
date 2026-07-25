@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, listAllInstalls, getAccountsForInstall, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, } from "./lib";
+import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, listAllInstalls, getAccountsForInstall, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, isInstalled, } from "./lib";
 function fmtResetsIn(resetsAt) {
     if (!resetsAt)
         return "unknown";
@@ -75,6 +75,14 @@ function main() {
         args.splice(claudeDirIdx, 2);
     }
     const [cmd, ...rest] = args;
+    // Check if claude-juggler is installed and warn if not (unless running install/uninstall)
+    if (cmd !== "install" && cmd !== "uninstall" && !isInstalled()) {
+        console.warn("\n⚠️  claude-juggler is not installed in Claude Code yet.");
+        console.warn("   Run `claude-juggler install` to enable:");
+        console.warn("   • /swap and /accounts commands in Claude Code");
+        console.warn("   • Automatic usage monitoring hook");
+        console.warn("   • Optional cron job to keep windows warm\n");
+    }
     switch (cmd) {
         case "add": {
             const name = rest[0];

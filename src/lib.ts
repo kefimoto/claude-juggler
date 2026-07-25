@@ -530,6 +530,13 @@ export function listAllInstalls(): Array<{ claudeDir: string; accountCount: numb
     }));
 }
 
+/** Check if claude-juggler is installed into the current Claude installation. */
+export function isInstalled(): boolean {
+  const commandsDir = join(globalClaudeDir, "commands", "claude-juggler");
+  const swapCmdPath = join(commandsDir, "swap.md");
+  return existsSync(swapCmdPath);
+}
+
 interface InstallOptions {
   installCron?: boolean;
   noCron?: boolean;
@@ -557,7 +564,7 @@ export function install(options: InstallOptions | boolean = {}): void {
       "Make sure Claude Code is installed and run: claude auth login\n" +
       "Or specify a custom directory: claude-juggler install --claude-dir <path>");
   }
-  const commandsDir = join(claudeDir, "commands");
+  const commandsDir = join(claudeDir, "commands", "claude-juggler");
   const settingsPath = join(claudeDir, "settings.json");
 
   // Verify settings.json exists (indicates valid Claude install)
@@ -685,7 +692,10 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
   );
 
   // Add the hook using portable command prefix, not file path
-  const hookCommand = `${cmdPrefix} hook-check`;
+  // Include --claude-dir if not default installation so hook knows which install to check
+  const hookCommand = claudeDir === defaultClaudeDir
+    ? `${cmdPrefix} hook-check`
+    : `${cmdPrefix} --claude-dir "${claudeDir}" hook-check`;
   hookEntry.hooks.push({
     type: "command",
     command: hookCommand,
@@ -695,8 +705,8 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 
   const displayDir = claudeDir === defaultClaudeDir ? "~/.claude" : claudeDir;
-  console.log(`✓ Created ${displayDir}/commands/swap.md`);
-  console.log(`✓ Created ${displayDir}/commands/accounts.md`);
+  console.log(`✓ Created ${displayDir}/commands/claude-juggler/swap.md`);
+  console.log(`✓ Created ${displayDir}/commands/claude-juggler/accounts.md`);
   console.log(`✓ Updated ${displayDir}/settings.json with hook: ${hookCommand}`);
 
   // Setup cron job
@@ -830,7 +840,7 @@ export function uninstall(): void {
   const defaultClaudeDir = join(homedir(), ".claude");
   const claudeDir = globalClaudeDir !== defaultClaudeDir ? globalClaudeDir : defaultClaudeDir;
 
-  const commandsDir = join(claudeDir, "commands");
+  const commandsDir = join(claudeDir, "commands", "claude-juggler");
   const settingsPath = join(claudeDir, "settings.json");
   const swapCmdPath = join(commandsDir, "swap.md");
   const accountsCmdPath = join(commandsDir, "accounts.md");
@@ -840,11 +850,11 @@ export function uninstall(): void {
   // Remove command files
   if (existsSync(swapCmdPath)) {
     require("fs").unlinkSync(swapCmdPath);
-    console.log(`✓ Removed ${displayDir}/commands/swap.md`);
+    console.log(`✓ Removed ${displayDir}/commands/claude-juggler/swap.md`);
   }
   if (existsSync(accountsCmdPath)) {
     require("fs").unlinkSync(accountsCmdPath);
-    console.log(`✓ Removed ${displayDir}/commands/accounts.md`);
+    console.log(`✓ Removed ${displayDir}/commands/claude-juggler/accounts.md`);
   }
 
   // Remove hook from settings.json
