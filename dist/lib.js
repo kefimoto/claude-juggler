@@ -467,13 +467,20 @@ export function install(options = {}) {
     // Support old boolean signature for backwards compatibility
     const opts = typeof options === "boolean" ? { installCron: options } : options;
     const defaultClaudeDir = join(homedir(), ".claude");
-    // Use global claudeDir if set via CLI, otherwise use opts or prompt
-    let claudeDir = globalClaudeDir !== defaultClaudeDir ? globalClaudeDir : (opts.claudeDir || defaultClaudeDir);
-    if (!opts.claudeDir && claudeDir === defaultClaudeDir && !opts.noCron && !opts.installCron) {
+    // Determine if we're in fully non-interactive mode (both --install-cron and --claude-dir set, or --no-cron and --claude-dir set)
+    const isNonInteractive = opts.claudeDir && (opts.noCron || opts.installCron);
+    let claudeDir;
+    if (opts.claudeDir) {
+        // Explicit CLI flag takes precedence
+        claudeDir = opts.claudeDir.replace(/^~/, homedir());
+    }
+    else if (!isNonInteractive) {
         // Interactive mode: ask for Claude directory
         const customDir = prompt(`Where is your Claude Code directory? [${defaultClaudeDir}] `);
-        if (customDir)
-            claudeDir = customDir.replace(/^~/, homedir());
+        claudeDir = customDir ? customDir.replace(/^~/, homedir()) : defaultClaudeDir;
+    }
+    else {
+        claudeDir = defaultClaudeDir;
     }
     // Verify Claude directory exists
     if (!existsSync(claudeDir)) {
@@ -615,15 +622,7 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
     console.log(`✓ Created ${displayDir}/commands/claude-juggler/accounts.md`);
     console.log(`✓ Updated ${displayDir}/settings.json with hook: ${hookCommand}`);
     // Setup cron job
-    if (opts.installCron && opts.claudeDir) {
-        // Both flags set: fully non-interactive, auto-install cron
-        const cronCommand = claudeDir === defaultClaudeDir
-            ? `${cmdPrefix} prime`
-            : `${cmdPrefix} --claude-dir "${claudeDir}" prime`;
-        setupCronForInstall(cronCommand, claudeDir);
-        console.log(`✓ Added cron job: */20 * * * * ${cronCommand}`);
-    }
-    else if (opts.noCron) {
+    if (opts.noCron) {
         // Explicitly disabled
     }
     else if (opts.installCron || promptYesNo("\nEnable automatic account priming with cron (every 20 minutes)? [y/N] ", false)) {
@@ -645,9 +644,10 @@ function prompt(question) {
     // Simple synchronous prompt using execSync
     const { execSync } = require("child_process");
     try {
+        // stdio: inherit for stdin/stderr so prompt displays; pipe for stdout to capture answer
         const answer = execSync(`bash -c 'read -p "${question}" answer; echo "$answer"'`, {
             encoding: "utf8",
-            stdio: ["inherit", "pipe", "pipe"],
+            stdio: ["inherit", "pipe", "inherit"],
         }).trim();
         return answer;
     }
