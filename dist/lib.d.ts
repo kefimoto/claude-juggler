@@ -69,6 +69,8 @@ export interface UsageResult {
     resetsAt: number | null;
 }
 /** Free local /usage report for whichever account is currently live. */
+/** Check usage for an account without swapping the active account. */
+export declare function checkUsageForAccount(account: AccountData): UsageResult;
 export declare function checkUsage(): UsageResult;
 /** Send one trivial message on whichever account is currently live. */
 export declare function ping(): void;
@@ -100,7 +102,9 @@ export declare function listAllInstalls(): Array<{
     accounts: string[];
     active: string | null;
 }>;
-/** Get status (usage + reset time) for all accounts across all installations. */
+/** Get status (usage + reset time) for all accounts across all installations.
+ * Uses temp config dirs for each account, allowing OS to parallelize up to ~8-10 Claude processes concurrently.
+ */
 export declare function statusAllInstalls(): Array<{
     claudeDir: string;
     accounts: Array<{

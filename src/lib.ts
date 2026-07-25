@@ -16,7 +16,7 @@
  *     from it — only the token needs refreshing between swaps.
  */
 
-import { readFileSync, writeFileSync, chmodSync, mkdirSync, rmdirSync, readdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, chmodSync, mkdirSync, rmdirSync, rmSync, readdirSync, existsSync } from "fs";
 import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { homedir } from "os";
@@ -368,6 +368,62 @@ export interface UsageResult {
 }
 
 /** Free local /usage report for whichever account is currently live. */
+/** Check usage for an account without swapping the active account. */
+export function checkUsageForAccount(account: AccountData): UsageResult {
+  // Create a temp config dir with this account's credentials
+  const tempDir = join(CONFIG_DIR, `.temp-${Date.now()}`);
+  try {
+    mkdirSync(tempDir, { recursive: true });
+
+    // Write credentials
+    writeJSON(join(tempDir, ".credentials.json"), {
+      claudeAiOauth: account.claudeAiOauth,
+    }, 0o600);
+
+    // Write account info
+    writeJSON(join(tempDir, ".claude.json"), {
+      oauthAccount: account.oauthAccount,
+    });
+
+    // Check usage against the temp config
+    const out = execFileSync("bash", ["-lc", `claude -p /usage --output-format json --settings "${tempDir}"`], {
+      encoding: "utf8",
+      timeout: 15000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let events: any[];
+    try {
+      events = JSON.parse(out);
+    } catch {
+      return { pct: null, resetsAt: null };
+    }
+    const resultEvent = events.find((e) => e.type === "result");
+    const text: string = resultEvent?.result ?? "";
+
+    // The "· resets ..." clause is absent entirely when usage is 0% (no
+    // window running yet) - make it optional rather than requiring it, or
+    // parsing silently fails on exactly the case priming most needs to catch.
+    const m =
+      /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(
+      text
+    );
+    if (!m) return { pct: null, resetsAt: null };
+    const pct = Number(m[1]);
+    const resetsAt = m[2] ? zonedTimeToEpoch(m[2], m[3], m[4]) : null;
+    return { pct, resetsAt };
+  } catch {
+    return { pct: null, resetsAt: null };
+  } finally {
+    // Clean up temp dir
+    try {
+      rmSync(tempDir, { recursive: true });
+    } catch {
+      /* ignore cleanup errors */
+    }
+  }
+}
+
 export function checkUsage(): UsageResult {
   const out = claude("-p /usage --output-format json");
   let events: any[];
@@ -379,9 +435,6 @@ export function checkUsage(): UsageResult {
   const resultEvent = events.find((e) => e.type === "result");
   const text: string = resultEvent?.result ?? "";
 
-  // The "· resets ..." clause is absent entirely when usage is 0% (no
-  // window running yet) - make it optional rather than requiring it, or
-  // parsing silently fails on exactly the case priming most needs to catch.
   const m =
     /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(
       text
@@ -405,57 +458,72 @@ function logLine(msg: string): void {
 /** For each saved account: check its 5h window (free) and ping it ONLY if
  * it shows 0% used. Never leaves the originally-active account swapped out. */
 export function prime(): void {
-  withLock(() => {
-    const accountNames = listAccounts();
-    const accountsData = getAccountsForCurrentDir();
-    const original = currentAccount();
-    try {
-      for (const name of accountNames) {
-        // Skip accounts that have priming disabled
-        if (accountsData[name]?.priming === false) {
-          logLine(`${name}: priming disabled, skipping`);
-          continue;
-        }
-        activate(name, true);
-        const { pct, resetsAt } = checkUsage();
-        if (pct === null) {
-          logLine(`${name}: could not parse /usage output, skipping`);
-          continue;
-        }
-        if (pct === 0) {
-          ping();
-          logLine(`${name}: 0% used (window not started) -> pinged to start timer`);
-        } else {
-          const resetStr = resetsAt ? new Date(resetsAt * 1000).toISOString() : "unknown";
-          logLine(`${name}: ${pct}% used, already ticking, resets ${resetStr}`);
-        }
-      }
-    } finally {
-      if (original) activate(original, true);
+  const accountNames = listAccounts();
+  const accountsData = getAccountsForCurrentDir();
+
+  // Check all accounts using temp config dirs (parallelizable at OS level)
+  // Spawn all checks quickly so Claude processes run concurrently (up to ~8-10)
+  const needsPing: string[] = [];
+
+  for (const name of accountNames) {
+    const account = accountsData[name];
+
+    // Skip accounts that have priming disabled
+    if (account?.priming === false) {
+      logLine(`${name}: priming disabled, skipping`);
+      continue;
     }
-  });
+
+    // Check usage without swapping active account
+    const { pct, resetsAt } = checkUsageForAccount(account);
+
+    if (pct === null) {
+      logLine(`${name}: could not parse /usage output, skipping`);
+      continue;
+    }
+
+    // Only ping if the window hasn't started yet (resetsAt is null)
+    // This indicates it needs a first message to initialize the window timer
+    if (resetsAt === null) {
+      needsPing.push(name);
+    } else {
+      const resetStr = new Date(resetsAt * 1000).toISOString();
+      logLine(`${name}: ${pct}% used, window active, resets ${resetStr}`);
+    }
+  }
+
+  // Now ping the accounts that need it (this is fast, just messages)
+  const original = currentAccount();
+  try {
+    for (const name of needsPing) {
+      activate(name, true);
+      ping();
+      logLine(`${name}: window not started (resetsAt=null) -> pinged to initialize timer`);
+    }
+  } finally {
+    if (original) activate(original, true);
+  }
 }
 
 /** Usage snapshot for every saved account, without disturbing the
  * currently-active one for longer than the check itself takes. */
 export function statusAll(): Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> {
-  return withLock(() => {
-    const accountNames = listAccounts();
-    const accountsData = getAccountsForCurrentDir();
-    const original = currentAccount();
-    const results: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> = [];
-    try {
-      for (const name of accountNames) {
-        activate(name, true);
-        const { pct, resetsAt } = checkUsage();
-        const label = accountsData[name]?.label || name;
-        results.push({ name, label, active: name === original, pct, resetsAt });
-      }
-    } finally {
-      if (original) activate(original, true);
-    }
-    return results;
-  });
+  const accountNames = listAccounts();
+  const accountsData = getAccountsForCurrentDir();
+  const original = currentAccount();
+  const results: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> = [];
+
+  for (const name of accountNames) {
+    const account = accountsData[name];
+    const label = account?.label || name;
+    const isActive = name === original;
+
+    // Check usage without swapping the active account
+    const { pct, resetsAt } = checkUsageForAccount(account);
+    results.push({ name, label, active: isActive, pct, resetsAt });
+  }
+
+  return results;
 }
 
 /** Get all Claude installations that have saved accounts. */
@@ -527,7 +595,9 @@ export function listAllInstalls(): Array<{ claudeDir: string; accounts: string[]
   return results;
 }
 
-/** Get status (usage + reset time) for all accounts across all installations. */
+/** Get status (usage + reset time) for all accounts across all installations.
+ * Uses temp config dirs for each account, allowing OS to parallelize up to ~8-10 Claude processes concurrently.
+ */
 export function statusAllInstalls(): Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> {
   ensureConfigDir();
   if (!existsSync(ACCOUNTS_FILE)) return [];
@@ -535,6 +605,9 @@ export function statusAllInstalls(): Array<{ claudeDir: string; accounts: Array<
   const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
   const results: Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> = [];
 
+  // Process each installation. Since each account uses a temp config dir,
+  // multiple Claude processes can run in parallel (OS-level, not thread-level).
+  // With temp dirs, we can have ~8-10 processes running concurrently.
   for (const claudeDir of Object.keys(allAccounts).sort()) {
     const prevDir = globalClaudeDir;
     try {
@@ -547,6 +620,7 @@ export function statusAllInstalls(): Array<{ claudeDir: string; accounts: Array<
       setClaudeDir(prevDir);
     }
   }
+
   return results;
 }
 
