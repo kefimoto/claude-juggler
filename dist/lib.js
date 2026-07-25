@@ -124,15 +124,14 @@ export function setThresholds(warning, autoswap, strategy, cacheTTL, warningThro
     const swapStr = final.autoswapThreshold === null ? "disabled" : `${final.autoswapThreshold}% (${final.autoswapStrategy})`;
     console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s, warning-throttle=${final.warningThrottleSeconds}s, lb-strategy=${final.loadBalancingStrategy}, verbosity=${final.hookVerbosity}`);
 }
-/** Toggle autoswap enabled/disabled for an account. Uses locking for thread-safe account file access. */
+/** Toggle autoswap enabled/disabled for an account.
+ * Callers own the lock (withLock is NOT re-entrant — nesting it deadlocks for 30s). */
 export function setAccountAutoswapEnabled(name, enabled) {
-    withLock(() => {
-        const accounts = getAccountsForCurrentDir();
-        if (!accounts[name])
-            throw new Error(`Account "${name}" not found`);
-        accounts[name].autoswapEnabled = enabled;
-        saveAccountsForCurrentDir(accounts);
-    });
+    const accounts = getAccountsForCurrentDir();
+    if (!accounts[name])
+        throw new Error(`Account "${name}" not found`);
+    accounts[name].autoswapEnabled = enabled;
+    saveAccountsForCurrentDir(accounts);
 }
 /** Get autoswap status for an account (default true). */
 export function isAccountAutoswapEnabled(name) {
@@ -140,18 +139,20 @@ export function isAccountAutoswapEnabled(name) {
     const account = accounts[name];
     return account?.autoswapEnabled !== false;
 }
-/** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
+/** Check if enough time has passed since the last warning. If yes, stamp state and return true.
+ * Callers must not hold the lock — withLock is not re-entrant. */
 export function shouldWarnNow() {
-    const cfg = readConfig();
-    const lastTimestamp = cfg.lastWarningTimestamp ?? 0;
     const throttle = getConfig().warningThrottleSeconds;
     const now = Math.floor(Date.now() / 1000);
-    if (now - lastTimestamp >= throttle) {
-        cfg.lastWarningTimestamp = now;
-        writeConfig(cfg);
-        return true;
-    }
-    return false;
+    return withLock(() => {
+        const state = readState();
+        if (now - (state.lastWarningTimestamp ?? 0) >= throttle) {
+            state.lastWarningTimestamp = now;
+            writeState(state);
+            return true;
+        }
+        return false;
+    });
 }
 function readJSON(path) {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -433,10 +434,10 @@ export function verifyStatus() {
 }
 /** Parse usage from /usage output text, extracting both 5h session and 7d weekly windows. */
 function parseUsageText(text) {
-    // Parse "Current session: NN% used · resets MMM DD, HH:MMpm (TZ)"
-    const sessionMatch = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
-    // Parse "Current week (all models): NN% used · resets MMM DD, HH:MMpm (TZ)"
-    const weeklyMatch = /Current week \(all models\):\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
+    // Parse "Current session: NN% used · resets MMM DD, HH:MMam (TZ)" or "Harm" (no :00)
+    const sessionMatch = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}(?::\d{2})?[ap]m)\s*\(([^)]+)\))?/.exec(text);
+    // Parse "Current week (all models): NN% used · resets MMM DD, HH:MMam (TZ)" or "5am" (no :00)
+    const weeklyMatch = /Current week \(all models\):\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}(?::\d{2})?[ap]m)\s*\(([^)]+)\))?/.exec(text);
     const sessionPct = sessionMatch ? Number(sessionMatch[1]) : null;
     const sessionResets = sessionMatch && sessionMatch[2] ? zonedTimeToEpoch(sessionMatch[2], sessionMatch[3], sessionMatch[4]) : null;
     const weeklyPct = weeklyMatch ? Number(weeklyMatch[1]) : null;
@@ -448,9 +449,9 @@ function parseUsageText(text) {
         weeklyResetsAt: weeklyResets,
     };
 }
-/** Convert "Jul 24, 11:09pm" + IANA tz name -> epoch seconds. */
+/** Convert "Jul 24, 11:09pm" or "Jul 27, 5am" + IANA tz name -> epoch seconds. */
 function zonedTimeToEpoch(monthDay, timeStr, tz) {
-    const m = /^([A-Za-z]{3}) (\d{1,2}), (\d{1,2}):(\d{2})(am|pm)$/i.exec(`${monthDay}, ${timeStr}`);
+    const m = /^([A-Za-z]{3}) (\d{1,2}), (\d{1,2})(?::(\d{2}))?(am|pm)$/i.exec(`${monthDay}, ${timeStr}`);
     if (!m)
         return null;
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -461,7 +462,7 @@ function zonedTimeToEpoch(monthDay, timeStr, tz) {
     let hour = Number(m[3]) % 12;
     if (m[5].toLowerCase() === "pm")
         hour += 12;
-    const minute = Number(m[4]);
+    const minute = m[4] ? Number(m[4]) : 0;
     const year = new Date().getFullYear();
     // Iterative zone-conversion trick: guess UTC = wall time, then correct
     // using the actual offset that timezone had at that instant.

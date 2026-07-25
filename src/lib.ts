@@ -73,7 +73,6 @@ export interface Config {
   commandPrefix?: string;
   usageCacheTTL?: number; // in seconds, default 30
   warningThrottleSeconds?: number; // in seconds, default 300 (5 min)
-  lastWarningTimestamp?: number; // epoch seconds, for tracking throttle
   loadBalancingStrategy?: "off" | "drain-near-reset" | "smart-lowest"; // default "off"
   loadBalancingMinSwapInterval?: number; // in seconds, default 600 (10 min)
   loadBalancingMinUsageDelta?: number; // minimum % difference to swap, default 5
@@ -90,8 +89,10 @@ function writeConfig(config: Config): void {
   writeJSON(CONFIG_PATH, config);
 }
 
+/** Mutable runtime state — never stored in config.json, which holds user settings only. */
 interface State {
   lastSwapTimestamp?: number; // epoch seconds, for load balancing strategy timing
+  lastWarningTimestamp?: number; // epoch seconds, for warning throttle
 }
 
 // State file structure: { "/path/to/claude": State, ... } - keyed by claude directory
@@ -151,14 +152,13 @@ export function setThresholds(warning?: number, autoswap?: number | null, strate
   console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s, warning-throttle=${final.warningThrottleSeconds}s, lb-strategy=${final.loadBalancingStrategy}, verbosity=${final.hookVerbosity}`);
 }
 
-/** Toggle autoswap enabled/disabled for an account. Uses locking for thread-safe account file access. */
+/** Toggle autoswap enabled/disabled for an account.
+ * Callers own the lock (withLock is NOT re-entrant — nesting it deadlocks for 30s). */
 export function setAccountAutoswapEnabled(name: string, enabled: boolean): void {
-  withLock(() => {
-    const accounts = getAccountsForCurrentDir();
-    if (!accounts[name]) throw new Error(`Account "${name}" not found`);
-    accounts[name].autoswapEnabled = enabled;
-    saveAccountsForCurrentDir(accounts);
-  });
+  const accounts = getAccountsForCurrentDir();
+  if (!accounts[name]) throw new Error(`Account "${name}" not found`);
+  accounts[name].autoswapEnabled = enabled;
+  saveAccountsForCurrentDir(accounts);
 }
 
 /** Get autoswap status for an account (default true). */
@@ -168,19 +168,21 @@ export function isAccountAutoswapEnabled(name: string): boolean {
   return account?.autoswapEnabled !== false;
 }
 
-/** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
+/** Check if enough time has passed since the last warning. If yes, stamp state and return true.
+ * Callers must not hold the lock — withLock is not re-entrant. */
 export function shouldWarnNow(): boolean {
-  const cfg = readConfig();
-  const lastTimestamp = cfg.lastWarningTimestamp ?? 0;
   const throttle = getConfig().warningThrottleSeconds;
   const now = Math.floor(Date.now() / 1000);
 
-  if (now - lastTimestamp >= throttle) {
-    cfg.lastWarningTimestamp = now;
-    writeConfig(cfg);
-    return true;
-  }
-  return false;
+  return withLock(() => {
+    const state = readState();
+    if (now - (state.lastWarningTimestamp ?? 0) >= throttle) {
+      state.lastWarningTimestamp = now;
+      writeState(state);
+      return true;
+    }
+    return false;
+  });
 }
 
 export interface OauthToken {
@@ -508,13 +510,13 @@ export function verifyStatus(): void {
 
 /** Parse usage from /usage output text, extracting both 5h session and 7d weekly windows. */
 function parseUsageText(text: string): UsageResult {
-  // Parse "Current session: NN% used · resets MMM DD, HH:MMpm (TZ)"
+  // Parse "Current session: NN% used · resets MMM DD, HH:MMam (TZ)" or "Harm" (no :00)
   const sessionMatch =
-    /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
+    /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}(?::\d{2})?[ap]m)\s*\(([^)]+)\))?/.exec(text);
 
-  // Parse "Current week (all models): NN% used · resets MMM DD, HH:MMpm (TZ)"
+  // Parse "Current week (all models): NN% used · resets MMM DD, HH:MMam (TZ)" or "5am" (no :00)
   const weeklyMatch =
-    /Current week \(all models\):\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
+    /Current week \(all models\):\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}(?::\d{2})?[ap]m)\s*\(([^)]+)\))?/.exec(text);
 
   const sessionPct = sessionMatch ? Number(sessionMatch[1]) : null;
   const sessionResets = sessionMatch && sessionMatch[2] ? zonedTimeToEpoch(sessionMatch[2], sessionMatch[3], sessionMatch[4]) : null;
@@ -530,9 +532,9 @@ function parseUsageText(text: string): UsageResult {
   };
 }
 
-/** Convert "Jul 24, 11:09pm" + IANA tz name -> epoch seconds. */
+/** Convert "Jul 24, 11:09pm" or "Jul 27, 5am" + IANA tz name -> epoch seconds. */
 function zonedTimeToEpoch(monthDay: string, timeStr: string, tz: string): number | null {
-  const m = /^([A-Za-z]{3}) (\d{1,2}), (\d{1,2}):(\d{2})(am|pm)$/i.exec(`${monthDay}, ${timeStr}`);
+  const m = /^([A-Za-z]{3}) (\d{1,2}), (\d{1,2})(?::(\d{2}))?(am|pm)$/i.exec(`${monthDay}, ${timeStr}`);
   if (!m) return null;
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const monthIdx = months.indexOf(m[1]);
@@ -540,7 +542,7 @@ function zonedTimeToEpoch(monthDay: string, timeStr: string, tz: string): number
   const day = Number(m[2]);
   let hour = Number(m[3]) % 12;
   if (m[5].toLowerCase() === "pm") hour += 12;
-  const minute = Number(m[4]);
+  const minute = m[4] ? Number(m[4]) : 0;
   const year = new Date().getFullYear();
 
   // Iterative zone-conversion trick: guess UTC = wall time, then correct
@@ -572,6 +574,13 @@ export interface UsageResult {
   resetsAt: number | null;
   weeklyPct?: number | null;  // 7d window usage %
   weeklyResetsAt?: number | null;  // 7d window reset time
+}
+
+/** One account's usage snapshot, as rendered by `status` / `status-all`. */
+export interface StatusRow extends UsageResult {
+  name: string;
+  label: string;
+  active: boolean;
 }
 
 /** Free local /usage report for whichever account is currently live. */
@@ -772,11 +781,11 @@ export function prime(): void {
 
 /** Usage snapshot for every saved account, without disturbing the
  * currently-active one for longer than the check itself takes. */
-export function statusAll(): Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null; weeklyPct?: number | null; weeklyResetsAt?: number | null }> {
+export function statusAll(): StatusRow[] {
   const accountNames = listAccounts();
   const accountsData = getAccountsForCurrentDir();
   const original = currentAccount();
-  const results: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null; weeklyPct?: number | null; weeklyResetsAt?: number | null }> = [];
+  const results: StatusRow[] = [];
 
   for (const name of accountNames) {
     const account = accountsData[name];
@@ -863,12 +872,12 @@ export function listAllInstalls(): Array<{ claudeDir: string; accounts: string[]
 /** Get status (usage + reset time) for all accounts across all installations.
  * Uses temp config dirs for each account, allowing OS to parallelize up to ~8-10 Claude processes concurrently.
  */
-export function statusAllInstalls(): Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> {
+export function statusAllInstalls(): Array<{ claudeDir: string; accounts: StatusRow[] }> {
   ensureConfigDir();
   if (!existsSync(ACCOUNTS_FILE)) return [];
 
   const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
-  const results: Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> = [];
+  const results: Array<{ claudeDir: string; accounts: StatusRow[] }> = [];
 
   // Process each installation. Since each account uses a temp config dir,
   // multiple Claude processes can run in parallel (OS-level, not thread-level).

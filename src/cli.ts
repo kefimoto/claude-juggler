@@ -32,13 +32,17 @@ import {
   setAccountAutoswapEnabled,
   isAccountAutoswapEnabled,
 } from "./lib";
+import type { StatusRow } from "./lib";
 
 function fmtResetsIn(resetsAt: number | null): string {
   if (!resetsAt) return "unknown";
   const mins = Math.round((resetsAt * 1000 - Date.now()) / 60000);
   if (mins <= 0) return "now";
   if (mins < 60) return `${mins}m`;
-  return `${Math.floor(mins / 60)}h${mins % 60}m`;
+  const hours = Math.floor(mins / 60);
+  // 7d windows routinely sit dozens of hours out; "2d3h" beats "51h12m".
+  if (hours >= 24) return `${Math.floor(hours / 24)}d${hours % 24}h`;
+  return `${hours}h${mins % 60}m`;
 }
 
 function fmtUsageBar(pct: number | null): string {
@@ -52,6 +56,19 @@ function fmtUsageBar(pct: number | null): string {
   return `${color}${bar}\x1b[0m ${pct}%`;
 }
 
+/** Render one account: name line, then its 5h and 7d usage bars.
+ * `indent` shifts the whole block for the nested `status-all` listing. */
+function printAccountRow(r: StatusRow, indent = ""): void {
+  const marker = r.active ? "*" : " ";
+  const bold = r.active ? "\x1b[1m" : "";
+  const reset = r.active ? "\x1b[0m" : "";
+  console.log(`${indent}${marker} ${bold}${r.name.padEnd(16)}${reset} ${r.label}`);
+  console.log(`${indent}  5h  ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
+  if (r.weeklyPct !== undefined && r.weeklyPct !== null) {
+    console.log(`${indent}  7d  ${fmtUsageBar(r.weeklyPct)}  resets in ${fmtResetsIn(r.weeklyResetsAt ?? null)}`);
+  }
+}
+
 function printStatusTable() {
   const rows = statusAll();
   const cfg = getConfig();
@@ -59,13 +76,7 @@ function printStatusTable() {
     console.log("No accounts saved yet. Run: claude-juggler add <name>");
     return;
   }
-  for (const r of rows) {
-    const marker = r.active ? "*" : " ";
-    const bold = r.active ? "\x1b[1m" : "";
-    const reset = r.active ? "\x1b[0m" : "";
-    console.log(`${marker} ${bold}${r.name.padEnd(16)}${reset} ${r.label}`);
-    console.log(`  ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
-  }
+  for (const r of rows) printAccountRow(r);
   if (cfg.loadBalancingStrategy !== "off") {
     console.log(
       `\n📊 Load balancing enabled: ${cfg.loadBalancingStrategy}` +
@@ -293,13 +304,7 @@ function main(): void {
           console.log("  (no accounts)");
           continue;
         }
-        for (const r of install.accounts) {
-          const marker = r.active ? "*" : " ";
-          const bold = r.active ? "\x1b[1m" : "";
-          const reset = r.active ? "\x1b[0m" : "";
-          console.log(`  ${marker} ${bold}${r.name.padEnd(16)}${reset} ${r.label}`);
-          console.log(`    ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
-        }
+        for (const r of install.accounts) printAccountRow(r, "  ");
       }
       break;
     }

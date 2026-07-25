@@ -27,7 +27,6 @@ export interface Config {
     commandPrefix?: string;
     usageCacheTTL?: number;
     warningThrottleSeconds?: number;
-    lastWarningTimestamp?: number;
     loadBalancingStrategy?: "off" | "drain-near-reset" | "smart-lowest";
     loadBalancingMinSwapInterval?: number;
     loadBalancingMinUsageDelta?: number;
@@ -45,11 +44,13 @@ export declare function getConfig(): {
     hookVerbosity: "silent" | "on-autoswap" | "always-notify";
 };
 export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number, warningThrottle?: number, lbStrategy?: "off" | "drain-near-reset" | "smart-lowest", lbInterval?: number, lbDelta?: number, verbosity?: "silent" | "on-autoswap" | "always-notify"): void;
-/** Toggle autoswap enabled/disabled for an account. Uses locking for thread-safe account file access. */
+/** Toggle autoswap enabled/disabled for an account.
+ * Callers own the lock (withLock is NOT re-entrant — nesting it deadlocks for 30s). */
 export declare function setAccountAutoswapEnabled(name: string, enabled: boolean): void;
 /** Get autoswap status for an account (default true). */
 export declare function isAccountAutoswapEnabled(name: string): boolean;
-/** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
+/** Check if enough time has passed since the last warning. If yes, stamp state and return true.
+ * Callers must not hold the lock — withLock is not re-entrant. */
 export declare function shouldWarnNow(): boolean;
 export interface OauthToken {
     accessToken: string;
@@ -99,6 +100,12 @@ export interface UsageResult {
     weeklyPct?: number | null;
     weeklyResetsAt?: number | null;
 }
+/** One account's usage snapshot, as rendered by `status` / `status-all`. */
+export interface StatusRow extends UsageResult {
+    name: string;
+    label: string;
+    active: boolean;
+}
 /** Free local /usage report for whichever account is currently live. */
 /** Check usage for an account without swapping the active account. */
 export declare function checkUsageForAccount(account: AccountData): UsageResult;
@@ -110,15 +117,7 @@ export declare function ping(): void;
 export declare function prime(): void;
 /** Usage snapshot for every saved account, without disturbing the
  * currently-active one for longer than the check itself takes. */
-export declare function statusAll(): Array<{
-    name: string;
-    label: string;
-    active: boolean;
-    pct: number | null;
-    resetsAt: number | null;
-    weeklyPct?: number | null;
-    weeklyResetsAt?: number | null;
-}>;
+export declare function statusAll(): StatusRow[];
 /** Get all Claude installations that have saved accounts. */
 export declare function getAllInstalls(): string[];
 /** Get account names for a specific Claude installation without changing active dir. */
@@ -140,13 +139,7 @@ export declare function listAllInstalls(): Array<{
  */
 export declare function statusAllInstalls(): Array<{
     claudeDir: string;
-    accounts: Array<{
-        name: string;
-        label: string;
-        active: boolean;
-        pct: number | null;
-        resetsAt: number | null;
-    }>;
+    accounts: StatusRow[];
 }>;
 /** Check if claude-juggler is installed into the current Claude installation. */
 export declare function isInstalled(): boolean;

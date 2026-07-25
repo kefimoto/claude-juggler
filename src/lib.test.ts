@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
+import { fileURLToPath } from "url";
 import { execSync } from "child_process";
 
-// Test setup
-const TEST_DIR = "/tmp/claude-juggler-test";
+// Per-process so concurrent vitest workers never rm -rf each other's fixtures.
+const TEST_DIR = join(tmpdir(), `claude-juggler-test-${process.pid}`);
+// Resolved from this file so the tests exercise their own tree, not whatever
+// happens to live at a hardcoded absolute path.
+const CLI_PATH = fileURLToPath(new URL("./cli.ts", import.meta.url));
 const TEST_CLAUDE_1 = join(TEST_DIR, "claude1");
 const TEST_CLAUDE_2 = join(TEST_DIR, "claude2");
 const TEST_CONFIG_DIR = join(TEST_DIR, "config");
@@ -36,7 +41,7 @@ function runCLI(args: string[], env: { CLAUDE_JUGGLER_DIR?: string; CLAUDE_CONFI
     .map(([k, v]) => `${k}="${v}"`)
     .join(" ");
   try {
-    const cmd = `${envStr} bun /home/jake/repos/claude-juggler/src/cli.ts ${args.join(" ")}`;
+    const cmd = `${envStr} bun ${CLI_PATH} ${args.join(" ")}`;
     return execSync(cmd, { cwd: TEST_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
   } catch (e: any) {
     return e.stdout || e.stderr || e.message;
