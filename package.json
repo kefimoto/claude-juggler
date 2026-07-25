@@ -1,6 +1,6 @@
 {
   "name": "claude-juggler",
-  "version": "0.1.0-beta.3",
+  "version": "0.1.0-beta.4",
   "description": "Switch between multiple Claude Code accounts instantly, in-session, no browser required. CLI + Claude Code commands + optional auto-stop-at-threshold hook.",
   "license": "MIT",
   "type": "module",
@@ -9,8 +9,7 @@
     "juggler": "./bin/claude-juggler"
   },
   "scripts": {
-    "build": "tsc",
-    "postinstall": "husky install"
+    "build": "tsc"
   },
   "files": [
     "dist",
