@@ -46,8 +46,12 @@ function fmtResetsIn(resetsAt: number | null): string {
 }
 
 function fmtUsageBar(pct: number | null): string {
-  if (pct === null) return "?";
   const barWidth = 20;
+  if (pct === null) {
+    // Show red bar for error state
+    const bar = "█".repeat(barWidth);
+    return `\x1b[31m${bar}\x1b[0m err`;
+  }
   const filled = Math.round((pct / 100) * barWidth);
   let color = "\x1b[32m"; // green
   if (pct >= 90) color = "\x1b[31m"; // red
@@ -63,9 +67,12 @@ function printAccountRow(r: StatusRow, indent = ""): void {
   const bold = r.active ? "\x1b[1m" : "";
   const reset = r.active ? "\x1b[0m" : "";
   console.log(`${indent}${marker} ${bold}${r.name.padEnd(16)}${reset} ${r.label}`);
-  console.log(`${indent}  5h  ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
+  // Only show "awaiting first message" if pct is valid (not null) and resetsAt is null (window not yet started)
+  const resetStr5h = r.pct === null ? "error retrieving usage" : (r.resetsAt === null ? "awaiting first message" : `resets in ${fmtResetsIn(r.resetsAt)}`);
+  console.log(`${indent}  5h  ${fmtUsageBar(r.pct)}  ${resetStr5h}`);
   if (r.weeklyPct !== undefined && r.weeklyPct !== null) {
-    console.log(`${indent}  7d  ${fmtUsageBar(r.weeklyPct)}  resets in ${fmtResetsIn(r.weeklyResetsAt ?? null)}`);
+    const resetStr7d = r.weeklyPct === null ? "error retrieving usage" : (r.weeklyResetsAt === null ? "awaiting first message" : `resets in ${fmtResetsIn(r.weeklyResetsAt ?? null)}`);
+    console.log(`${indent}  7d  ${fmtUsageBar(r.weeklyPct)}  ${resetStr7d}`);
   }
 }
 
