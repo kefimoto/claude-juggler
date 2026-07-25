@@ -382,7 +382,14 @@ export function install(options = {}) {
     // Support old boolean signature for backwards compatibility
     const opts = typeof options === "boolean" ? { installCron: options } : options;
     const defaultClaudeDir = join(homedir(), ".claude");
-    const claudeDir = opts.claudeDir || defaultClaudeDir;
+    // Prompt for Claude directory if not in non-interactive mode
+    let claudeDir = opts.claudeDir || defaultClaudeDir;
+    if (!opts.claudeDir && !opts.noCron && !opts.installCron) {
+        // Interactive mode: ask for Claude directory
+        const customDir = prompt(`Where is your Claude Code directory? [${defaultClaudeDir}] `);
+        if (customDir)
+            claudeDir = customDir;
+    }
     // Verify Claude directory exists
     if (!existsSync(claudeDir)) {
         throw new Error(`Claude Code directory not found at ${claudeDir}\n` +
@@ -518,24 +525,48 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
     console.log("✓ Created ~/.claude/commands/swap.md");
     console.log("✓ Created ~/.claude/commands/accounts.md");
     console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookCommand}`);
-    // Setup cron job only if BOTH flags are set (non-interactive mode)
+    // Setup cron job
     if (opts.installCron && opts.claudeDir) {
-        // Both flags set: fully non-interactive, auto-install cron with portable command
+        // Both flags set: fully non-interactive, auto-install cron
         const cronCommand = `${cmdPrefix} prime`;
         setupCron(cronCommand);
         console.log(`✓ Added cron job: */20 * * * * ${cronCommand}`);
     }
-    else if (!opts.noCron) {
-        // Interactive mode: suggest cron setup
-        console.log("\nTo enable automatic account priming, run:");
-        console.log("  claude-juggler install --install-cron");
+    else if (opts.noCron) {
+        // Explicitly disabled
+    }
+    else if (opts.installCron || promptYesNo("\nEnable automatic account priming with cron (every 20 minutes)? [y/N] ", false)) {
+        // Either --install-cron was set, or user said yes
+        const cronCommand = `${cmdPrefix} prime`;
+        try {
+            setupCron(cronCommand);
+            console.log(`✓ Added cron job: */20 * * * * ${cronCommand}`);
+        }
+        catch (e) {
+            console.warn(`Warning: Could not setup cron job: ${e.message}`);
+        }
     }
     console.log("\nSetup complete! Use /swap and /accounts in Claude Code, or run: claude-juggler [add|list|use|status]");
 }
-function shouldSetupCron() {
-    // For now, return false - user must use -y flag or manually set up
-    // In a future version with readline, could prompt interactively
-    return false;
+function prompt(question) {
+    // Simple synchronous prompt using execSync
+    const { execSync } = require("child_process");
+    try {
+        const answer = execSync(`bash -c 'read -p "${question}" answer; echo "$answer"'`, {
+            encoding: "utf8",
+            stdio: ["inherit", "pipe", "pipe"],
+        }).trim();
+        return answer;
+    }
+    catch {
+        return "";
+    }
+}
+function promptYesNo(question, defaultYes = false) {
+    const answer = prompt(question + (defaultYes ? " [Y/n] " : " [y/N] "));
+    if (!answer)
+        return defaultYes;
+    return answer.toLowerCase() === "y" || answer.toLowerCase() === "yes";
 }
 function setupCron(command) {
     try {
