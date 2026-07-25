@@ -20,12 +20,13 @@ import { readFileSync, writeFileSync, chmodSync, mkdirSync, rmdirSync, rmSync, r
 import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { homedir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 
 export const CONFIG_DIR = process.env.CLAUDE_JUGGLER_DIR || join(homedir(), ".claude-juggler");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const LOG_PATH = join(CONFIG_DIR, "prime.log");
 const LOCK_DIR = join(CONFIG_DIR, ".lock.d");
+const STATE_PATH = join(CONFIG_DIR, "state.json");
 
 // Usage cache: { accountTokenHash -> { result, timestamp } }
 interface CacheEntry {
@@ -69,6 +70,10 @@ export interface Config {
   usageCacheTTL?: number; // in seconds, default 30
   warningThrottleSeconds?: number; // in seconds, default 300 (5 min)
   lastWarningTimestamp?: number; // epoch seconds, for tracking throttle
+  loadBalancingStrategy?: "off" | "drain-near-reset" | "smart-lowest"; // default "off"
+  loadBalancingMinSwapInterval?: number; // in seconds, default 600 (10 min)
+  loadBalancingMinUsageDelta?: number; // minimum % difference to swap, default 5
+  hookVerbosity?: "silent" | "on-autoswap" | "always-notify"; // default "on-autoswap"
 }
 
 function readConfig(): Config {
@@ -81,7 +86,36 @@ function writeConfig(config: Config): void {
   writeJSON(CONFIG_PATH, config);
 }
 
-export function getConfig(): { warningThreshold: number; autoswapThreshold: number | null; autoswapStrategy: "next" | "prev" | "lowest"; usageCacheTTL: number; warningThrottleSeconds: number } {
+interface State {
+  lastSwapTimestamp?: number; // epoch seconds, for load balancing strategy timing
+}
+
+// State file structure: { "/path/to/claude": State, ... } - keyed by claude directory
+function readState(): State {
+  if (!existsSync(STATE_PATH)) return {};
+  try {
+    const allState = readJSON<Record<string, State>>(STATE_PATH);
+    return allState[globalClaudeDir] ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function writeState(state: State): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  let allState: Record<string, State> = {};
+  if (existsSync(STATE_PATH)) {
+    try {
+      allState = readJSON<Record<string, State>>(STATE_PATH);
+    } catch {
+      allState = {};
+    }
+  }
+  allState[globalClaudeDir] = state;
+  writeJSON(STATE_PATH, allState);
+}
+
+export function getConfig(): { warningThreshold: number; autoswapThreshold: number | null; autoswapStrategy: "next" | "prev" | "lowest"; usageCacheTTL: number; warningThrottleSeconds: number; loadBalancingStrategy: "off" | "drain-near-reset" | "smart-lowest"; loadBalancingMinSwapInterval: number; loadBalancingMinUsageDelta: number; hookVerbosity: "silent" | "on-autoswap" | "always-notify" } {
   const cfg = readConfig();
   return {
     warningThreshold: cfg.warningThreshold ?? 95,
@@ -89,20 +123,45 @@ export function getConfig(): { warningThreshold: number; autoswapThreshold: numb
     autoswapStrategy: cfg.autoswapStrategy ?? "lowest",
     usageCacheTTL: cfg.usageCacheTTL ?? 30,
     warningThrottleSeconds: cfg.warningThrottleSeconds ?? 300,
+    loadBalancingStrategy: cfg.loadBalancingStrategy ?? "off",
+    loadBalancingMinSwapInterval: cfg.loadBalancingMinSwapInterval ?? 600,
+    loadBalancingMinUsageDelta: cfg.loadBalancingMinUsageDelta ?? 5,
+    hookVerbosity: cfg.hookVerbosity ?? "on-autoswap",
   };
 }
 
-export function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number, warningThrottle?: number): void {
+export function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number, warningThrottle?: number, lbStrategy?: "off" | "drain-near-reset" | "smart-lowest", lbInterval?: number, lbDelta?: number, verbosity?: "silent" | "on-autoswap" | "always-notify"): void {
   const cfg = readConfig();
   if (warning !== undefined) cfg.warningThreshold = warning;
   if (autoswap !== undefined) cfg.autoswapThreshold = autoswap;
   if (strategy !== undefined) cfg.autoswapStrategy = strategy;
   if (cacheTTL !== undefined) cfg.usageCacheTTL = cacheTTL;
   if (warningThrottle !== undefined) cfg.warningThrottleSeconds = warningThrottle;
+  if (lbStrategy !== undefined) cfg.loadBalancingStrategy = lbStrategy;
+  if (lbInterval !== undefined) cfg.loadBalancingMinSwapInterval = lbInterval;
+  if (lbDelta !== undefined) cfg.loadBalancingMinUsageDelta = lbDelta;
+  if (verbosity !== undefined) cfg.hookVerbosity = verbosity;
   writeConfig(cfg);
   const final = getConfig();
   const swapStr = final.autoswapThreshold === null ? "disabled" : `${final.autoswapThreshold}% (${final.autoswapStrategy})`;
-  console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s, warning-throttle=${final.warningThrottleSeconds}s`);
+  console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s, warning-throttle=${final.warningThrottleSeconds}s, lb-strategy=${final.loadBalancingStrategy}, verbosity=${final.hookVerbosity}`);
+}
+
+/** Toggle autoswap enabled/disabled for an account. Uses locking for thread-safe account file access. */
+export function setAccountAutoswapEnabled(name: string, enabled: boolean): void {
+  withLock(() => {
+    const accounts = getAccountsForCurrentDir();
+    if (!accounts[name]) throw new Error(`Account "${name}" not found`);
+    accounts[name].autoswapEnabled = enabled;
+    saveAccountsForCurrentDir(accounts);
+  });
+}
+
+/** Get autoswap status for an account (default true). */
+export function isAccountAutoswapEnabled(name: string): boolean {
+  const accounts = getAccountsForCurrentDir();
+  const account = accounts[name];
+  return account?.autoswapEnabled !== false;
 }
 
 /** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
@@ -131,6 +190,7 @@ export interface AccountData {
   oauthAccount: Record<string, unknown>;
   claudeAiOauth: OauthToken;
   priming?: boolean; // Whether to prime this account (default true)
+  autoswapEnabled?: boolean; // Whether account is available for autoswap/load-balancing (default true)
 }
 
 function readJSON<T = any>(path: string): T {
@@ -346,6 +406,91 @@ export function allAccountsAboveThreshold(threshold: number): boolean {
   return rows.every((r) => r.pct === null || r.pct >= threshold);
 }
 
+/** Select next account using load balancing strategy. Returns null if no suitable account found. */
+export function selectAccountByLoadBalancing(): string | null {
+  const cfg = getConfig();
+  if (cfg.loadBalancingStrategy === "off") return null;
+
+  const rows = statusAll();
+  const enabledAccounts = rows.filter((r) => isAccountAutoswapEnabled(r.name));
+
+  if (enabledAccounts.length === 0) return null;
+
+  if (cfg.loadBalancingStrategy === "drain-near-reset") {
+    // Drain near reset: prioritize using accounts with high session usage but adequate weekly headroom
+    // Unstarted windows (resetsAt === null) are highest priority — activating them starts a fresh 5h clock
+    let candidate: typeof enabledAccounts[0] | null = null;
+
+    // First pass: look for unstarted windows (resetsAt === null means 0% used, not yet activated)
+    for (const r of enabledAccounts) {
+      if (r.pct === 0 && r.resetsAt === null) {
+        const rWeeklyPct = r.weeklyPct ?? 0;
+        const candWeeklyPct = candidate?.weeklyPct ?? 0;
+        if (candidate === null || rWeeklyPct > candWeeklyPct) {
+          candidate = r;
+        }
+      }
+    }
+
+    // If found unstarted window, use it
+    if (candidate) return candidate.name;
+
+    // Second pass: among live windows, prioritize highest session usage (closest to reset)
+    // that doesn't exhaust weekly quota
+    for (const r of enabledAccounts) {
+      if (r.pct === null || r.resetsAt === null) continue;
+      // Guard: skip if weekly is near exhaustion (>90%)
+      const weeklyPct = r.weeklyPct ?? 0;
+      if (weeklyPct > 90) continue;
+      if (candidate === null || r.pct > (candidate.pct ?? 0)) {
+        candidate = r;
+      }
+    }
+
+    return candidate?.name ?? null;
+  }
+
+  if (cfg.loadBalancingStrategy === "smart-lowest") {
+    // Check swap interval constraint
+    const state = readState();
+    const lastSwap = (state.lastSwapTimestamp ?? 0);
+    const now = Math.floor(Date.now() / 1000);
+    if (now - lastSwap < cfg.loadBalancingMinSwapInterval) {
+      return null; // Too soon to swap
+    }
+
+    // Find lowest usage account
+    let lowestUsage: typeof enabledAccounts[0] | null = null;
+    const current = currentAccount();
+    const currentRow = rows.find((r) => r.name === current);
+    const currentUsage = currentRow?.pct ?? 0;
+
+    for (const r of enabledAccounts) {
+      const rPct = r.pct ?? 0;
+      const lowestPct = lowestUsage?.pct ?? 100;
+      if (lowestUsage === null || rPct < lowestPct) {
+        lowestUsage = r;
+      }
+    }
+
+    // Only swap if usage delta is large enough
+    if (lowestUsage && currentUsage - (lowestUsage.pct ?? 0) >= cfg.loadBalancingMinUsageDelta) {
+      return lowestUsage.name;
+    }
+  }
+
+  return null;
+}
+
+/** Record that a swap just happened (for load balancing strategy timing). Uses locking. */
+export function recordSwap(): void {
+  withLock(() => {
+    const state = readState();
+    state.lastSwapTimestamp = Math.floor(Date.now() / 1000);
+    writeState(state);
+  });
+}
+
 function claude(args: string): string {
   // bash -lc sources shell rc files (nvm init etc.) so `claude` resolves
   // under cron's minimal PATH, not just interactively.
@@ -358,6 +503,30 @@ function claude(args: string): string {
 export function verifyStatus(): void {
   console.log("--- verifying ---");
   console.log(claude("auth status --json").trim());
+}
+
+/** Parse usage from /usage output text, extracting both 5h session and 7d weekly windows. */
+function parseUsageText(text: string): UsageResult {
+  // Parse "Current session: NN% used · resets MMM DD, HH:MMpm (TZ)"
+  const sessionMatch =
+    /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
+
+  // Parse "Current week (all models): NN% used · resets MMM DD, HH:MMpm (TZ)"
+  const weeklyMatch =
+    /Current week \(all models\):\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
+
+  const sessionPct = sessionMatch ? Number(sessionMatch[1]) : null;
+  const sessionResets = sessionMatch && sessionMatch[2] ? zonedTimeToEpoch(sessionMatch[2], sessionMatch[3], sessionMatch[4]) : null;
+
+  const weeklyPct = weeklyMatch ? Number(weeklyMatch[1]) : null;
+  const weeklyResets = weeklyMatch && weeklyMatch[2] ? zonedTimeToEpoch(weeklyMatch[2], weeklyMatch[3], weeklyMatch[4]) : null;
+
+  return {
+    pct: sessionPct,
+    resetsAt: sessionResets,
+    weeklyPct,
+    weeklyResetsAt: weeklyResets,
+  };
 }
 
 /** Convert "Jul 24, 11:09pm" + IANA tz name -> epoch seconds. */
@@ -400,6 +569,8 @@ function zonedTimeToEpoch(monthDay: string, timeStr: string, tz: string): number
 export interface UsageResult {
   pct: number | null;
   resetsAt: number | null;
+  weeklyPct?: number | null;  // 7d window usage %
+  weeklyResetsAt?: number | null;  // 7d window reset time
 }
 
 /** Free local /usage report for whichever account is currently live. */
@@ -459,12 +630,9 @@ export function checkUsageForAccount(account: AccountData): UsageResult {
       text = parsed.result ?? "";
     }
 
-    const m =
-      /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(
-      text
-    );
-    if (!m) {
-      const result = { pct: null, resetsAt: null };
+    // Parse both session and weekly windows
+    const result = parseUsageText(text);
+    if (result.pct === null) {
       usageCache.set(cacheKey, { result, timestamp: Date.now() });
       return result;
     }
@@ -503,9 +671,6 @@ export function checkUsageForAccount(account: AccountData): UsageResult {
       // Failed to sync refreshed token, continue anyway
     }
 
-    const pct = Number(m[1]);
-    const resetsAt = m[2] ? zonedTimeToEpoch(m[2], m[3], m[4]) : null;
-    const result = { pct, resetsAt };
     usageCache.set(cacheKey, { result, timestamp: Date.now() });
     return result;
   } catch {
@@ -541,14 +706,7 @@ export function checkUsage(): UsageResult {
     text = parsed.result ?? "";
   }
 
-  const m =
-    /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(
-      text
-    );
-  if (!m) return { pct: null, resetsAt: null };
-  const pct = Number(m[1]);
-  const resetsAt = m[2] ? zonedTimeToEpoch(m[2], m[3], m[4]) : null;
-  return { pct, resetsAt };
+  return parseUsageText(text);
 }
 
 /** Send one trivial message on whichever account is currently live. */
@@ -613,11 +771,11 @@ export function prime(): void {
 
 /** Usage snapshot for every saved account, without disturbing the
  * currently-active one for longer than the check itself takes. */
-export function statusAll(): Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> {
+export function statusAll(): Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null; weeklyPct?: number | null; weeklyResetsAt?: number | null }> {
   const accountNames = listAccounts();
   const accountsData = getAccountsForCurrentDir();
   const original = currentAccount();
-  const results: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> = [];
+  const results: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null; weeklyPct?: number | null; weeklyResetsAt?: number | null }> = [];
 
   for (const name of accountNames) {
     const account = accountsData[name];
@@ -625,8 +783,8 @@ export function statusAll(): Array<{ name: string; label: string; active: boolea
     const isActive = name === original;
 
     // Check usage without swapping the active account
-    const { pct, resetsAt } = checkUsageForAccount(account);
-    results.push({ name, label, active: isActive, pct, resetsAt });
+    const { pct, resetsAt, weeklyPct, weeklyResetsAt } = checkUsageForAccount(account);
+    results.push({ name, label, active: isActive, pct, resetsAt, weeklyPct, weeklyResetsAt });
   }
 
   return results;

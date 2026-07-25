@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, statusAllInstalls, listAllInstalls, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, isInstalled, setPriming, checkUsage, getAccountsForCurrentDir, allAccountsAboveThreshold, shouldWarnNow, } from "./lib";
+import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, statusAllInstalls, listAllInstalls, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, isInstalled, setPriming, checkUsage, getAccountsForCurrentDir, allAccountsAboveThreshold, shouldWarnNow, selectAccountByLoadBalancing, recordSwap, setAccountAutoswapEnabled, } from "./lib";
 function fmtResetsIn(resetsAt) {
     if (!resetsAt)
         return "unknown";
@@ -25,6 +25,7 @@ function fmtUsageBar(pct) {
 }
 function printStatusTable() {
     const rows = statusAll();
+    const cfg = getConfig();
     if (rows.length === 0) {
         console.log("No accounts saved yet. Run: claude-juggler add <name>");
         return;
@@ -35,6 +36,12 @@ function printStatusTable() {
         const reset = r.active ? "\x1b[0m" : "";
         console.log(`${marker} ${bold}${r.name.padEnd(16)}${reset} ${r.label}`);
         console.log(`  ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
+    }
+    if (cfg.loadBalancingStrategy !== "off") {
+        console.log(`\n📊 Load balancing enabled: ${cfg.loadBalancingStrategy}` +
+            (cfg.loadBalancingStrategy === "smart-lowest"
+                ? ` (interval: ${cfg.loadBalancingMinSwapInterval}s, delta: ${cfg.loadBalancingMinUsageDelta}%)`
+                : ""));
     }
 }
 function usage() {
@@ -56,6 +63,9 @@ Commands:
   remove <name>            Forget a saved account (must not be active)
   set-priming <name> <on|off>
                            Enable/disable automatic priming for an account
+  set-autoswap-enabled <name> <on|off>
+                           Enable/disable account for autoswap and load-balancing
+                           (off = manual-only account)
   list                     List saved account names for current Claude install
   status                   Show all accounts' usage % and time-to-reset for current install
   use <name>               Switch to a specific account
@@ -72,7 +82,7 @@ Commands:
                              --no-cron: don't setup cron job
   uninstall                Remove Claude Code integration for current installation
   uninstall-all            Remove Claude Code integration for all installations
-  config [show|set-warning|set-autoswap|set-strategy|set-cache-ttl|set-warning-throttle]
+  config [show|set-warning|set-autoswap|set-strategy|set-cache-ttl|set-warning-throttle|set-lb-strategy|set-lb-interval|set-lb-delta|set-hook-verbosity]
                            View or edit config
                            show: display current config
                            set-warning <pct>: set warning threshold
@@ -80,6 +90,15 @@ Commands:
                            set-strategy <next|prev|lowest>: set autoswap behavior
                            set-cache-ttl <seconds>: set usage cache TTL (default 30)
                            set-warning-throttle <seconds>: min seconds between warnings (default 300)
+                           set-lb-strategy <off|drain-near-reset|smart-lowest>: load balancing strategy
+                             drain-near-reset: prioritize high-usage accounts to drain quota before reset
+                               (set autoswap=100 for aggressive draining)
+                             smart-lowest: use lowest account with timing/delta heuristics
+                           Reliability: If an account hits 100% usage, the swap is guaranteed to be
+                             reported on the next hook call. The model will be notified.
+                           set-lb-interval <seconds>: min seconds between swaps for smart-lowest (default 600)
+                           set-lb-delta <percent>: min usage % difference for smart-lowest swap (default 5)
+                           set-hook-verbosity <silent|on-autoswap|always-notify>: hook notification level (default on-autoswap)
   prime                    Check every account; ping any at 0% used
                            so its 5h window starts ticking (for cron)
   check-threshold [pct]    Exit 1 and print a warning if the active
@@ -147,6 +166,20 @@ function main() {
             }
             withLock(() => setPriming(name, enabled));
             console.log(`Priming ${enabled ? "enabled" : "disabled"} for "${name}".`);
+            break;
+        }
+        case "set-autoswap-enabled": {
+            const name = rest[0];
+            const state = rest[1];
+            if (!name || !state)
+                return usage(), process.exit(1);
+            const enabled = state.toLowerCase() === "on";
+            if (state.toLowerCase() !== "on" && state.toLowerCase() !== "off") {
+                console.error("State must be 'on' or 'off'");
+                process.exit(1);
+            }
+            withLock(() => setAccountAutoswapEnabled(name, enabled));
+            console.log(`Autoswap ${enabled ? "enabled" : "disabled"} for "${name}".`);
             break;
         }
         case "list": {
@@ -283,6 +316,11 @@ function main() {
                 console.log(`autoswapStrategy: ${cfg.autoswapStrategy}`);
                 console.log(`usageCacheTTL: ${cfg.usageCacheTTL}s`);
                 console.log(`warningThrottle: ${cfg.warningThrottleSeconds}s`);
+                console.log(`hookVerbosity: ${cfg.hookVerbosity} (silent|on-autoswap|always-notify)`);
+                console.log(`loadBalancingStrategy: ${cfg.loadBalancingStrategy}`);
+                if (cfg.loadBalancingStrategy !== "off") {
+                    console.log(`  ↳ minSwapInterval: ${cfg.loadBalancingMinSwapInterval}s, minUsageDelta: ${cfg.loadBalancingMinUsageDelta}%`);
+                }
             }
             else if (subCmd === "set-warning") {
                 const val = Number(rest[1]);
@@ -324,8 +362,40 @@ function main() {
                 }
                 setThresholds(undefined, undefined, undefined, undefined, val);
             }
+            else if (subCmd === "set-lb-strategy") {
+                const strat = rest[1];
+                if (!["off", "drain-near-reset", "smart-lowest"].includes(strat)) {
+                    console.error("Load balancing strategy must be: off, drain-near-reset, or smart-lowest");
+                    process.exit(1);
+                }
+                setThresholds(undefined, undefined, undefined, undefined, undefined, strat);
+            }
+            else if (subCmd === "set-lb-interval") {
+                const val = Number(rest[1]);
+                if (isNaN(val) || val < 1) {
+                    console.error("Load balancing swap interval must be >= 1 second");
+                    process.exit(1);
+                }
+                setThresholds(undefined, undefined, undefined, undefined, undefined, undefined, val);
+            }
+            else if (subCmd === "set-lb-delta") {
+                const val = Number(rest[1]);
+                if (isNaN(val) || val < 0) {
+                    console.error("Load balancing usage delta must be >= 0 percent");
+                    process.exit(1);
+                }
+                setThresholds(undefined, undefined, undefined, undefined, undefined, undefined, undefined, val);
+            }
+            else if (subCmd === "set-hook-verbosity") {
+                const verb = rest[1];
+                if (!["silent", "on-autoswap", "always-notify"].includes(verb)) {
+                    console.error("Hook verbosity must be: silent, on-autoswap, or always-notify");
+                    process.exit(1);
+                }
+                setThresholds(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, verb);
+            }
             else {
-                console.error("Unknown config subcommand. Use: show, set-warning, set-autoswap, set-strategy, set-cache-ttl, set-warning-throttle");
+                console.error("Unknown config subcommand. Use: show, set-warning, set-autoswap, set-strategy, set-cache-ttl, set-warning-throttle, set-lb-strategy, set-lb-interval, set-lb-delta, set-hook-verbosity");
                 process.exit(1);
             }
             break;
@@ -411,12 +481,15 @@ function main() {
                     // Re-check to get new account info
                     const newName = currentAccount();
                     const newLabel = accountsData[newName || ""]?.label || newName || "unknown";
-                    const context = `✓ NOTIFY THE USER: ACCOUNT SWAPPED\n` +
-                        `Automatically switched from "${currentName}" (${label}, was at ${pct}% usage) ` +
-                        `to "${newName}" (${newLabel}) using strategy "${cfg.autoswapStrategy}".`;
-                    console.log(JSON.stringify({
-                        hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-                    }));
+                    // Show swap message based on verbosity (autoswap threshold triggers are always notified in on-autoswap or always-notify mode)
+                    if (cfg.hookVerbosity === "always-notify" || cfg.hookVerbosity === "on-autoswap") {
+                        const context = `✓ NOTIFY THE USER: ACCOUNT SWAPPED\n` +
+                            `Automatically switched from "${currentName}" (${label}, was at ${pct}% usage) ` +
+                            `to "${newName}" (${newLabel}) using strategy "${cfg.autoswapStrategy}".`;
+                        console.log(JSON.stringify({
+                            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                        }));
+                    }
                 }
                 // Warn if at or above warning threshold (with throttling)
                 else if (pct >= warningThreshold) {
@@ -428,6 +501,30 @@ function main() {
                         console.log(JSON.stringify({
                             hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
                         }));
+                    }
+                }
+                // Load balancing: if autoswap didn't trigger and load balancing is enabled, consider switching
+                if (cfg.loadBalancingStrategy !== "off" && (autoswapThreshold === null || pct < autoswapThreshold)) {
+                    const lbTarget = selectAccountByLoadBalancing();
+                    if (lbTarget && lbTarget !== currentName) {
+                        try {
+                            withLock(() => activate(lbTarget, true));
+                            recordSwap();
+                            // Notify if verbosity allows
+                            if (cfg.hookVerbosity === "always-notify") {
+                                const newName = currentAccount();
+                                const newLabel = accountsData[newName || ""]?.label || newName || "unknown";
+                                const context = `✓ NOTIFY THE USER: ACCOUNT SWAPPED (LOAD BALANCING)\n` +
+                                    `Load balancing switched from "${currentName}" (${label}, at ${pct}% usage) ` +
+                                    `to "${newName}" (${newLabel}) using strategy "${cfg.loadBalancingStrategy}".`;
+                                console.log(JSON.stringify({
+                                    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                                }));
+                            }
+                        }
+                        catch {
+                            // Load balance swap failed, continue silently
+                        }
                     }
                 }
             }

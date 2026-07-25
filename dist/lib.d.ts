@@ -28,6 +28,10 @@ export interface Config {
     usageCacheTTL?: number;
     warningThrottleSeconds?: number;
     lastWarningTimestamp?: number;
+    loadBalancingStrategy?: "off" | "drain-near-reset" | "smart-lowest";
+    loadBalancingMinSwapInterval?: number;
+    loadBalancingMinUsageDelta?: number;
+    hookVerbosity?: "silent" | "on-autoswap" | "always-notify";
 }
 export declare function getConfig(): {
     warningThreshold: number;
@@ -35,8 +39,16 @@ export declare function getConfig(): {
     autoswapStrategy: "next" | "prev" | "lowest";
     usageCacheTTL: number;
     warningThrottleSeconds: number;
+    loadBalancingStrategy: "off" | "drain-near-reset" | "smart-lowest";
+    loadBalancingMinSwapInterval: number;
+    loadBalancingMinUsageDelta: number;
+    hookVerbosity: "silent" | "on-autoswap" | "always-notify";
 };
-export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number, warningThrottle?: number): void;
+export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number, warningThrottle?: number, lbStrategy?: "off" | "drain-near-reset" | "smart-lowest", lbInterval?: number, lbDelta?: number, verbosity?: "silent" | "on-autoswap" | "always-notify"): void;
+/** Toggle autoswap enabled/disabled for an account. Uses locking for thread-safe account file access. */
+export declare function setAccountAutoswapEnabled(name: string, enabled: boolean): void;
+/** Get autoswap status for an account (default true). */
+export declare function isAccountAutoswapEnabled(name: string): boolean;
 /** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
 export declare function shouldWarnNow(): boolean;
 export interface OauthToken {
@@ -49,6 +61,7 @@ export interface AccountData {
     oauthAccount: Record<string, unknown>;
     claudeAiOauth: OauthToken;
     priming?: boolean;
+    autoswapEnabled?: boolean;
 }
 export declare function getAccountsForCurrentDir(): {
     [name: string]: AccountData;
@@ -75,10 +88,16 @@ export declare function prevAccount(): string;
 export declare function lowestUsageAccount(): string;
 /** Check if all accounts are at or above the given threshold. */
 export declare function allAccountsAboveThreshold(threshold: number): boolean;
+/** Select next account using load balancing strategy. Returns null if no suitable account found. */
+export declare function selectAccountByLoadBalancing(): string | null;
+/** Record that a swap just happened (for load balancing strategy timing). Uses locking. */
+export declare function recordSwap(): void;
 export declare function verifyStatus(): void;
 export interface UsageResult {
     pct: number | null;
     resetsAt: number | null;
+    weeklyPct?: number | null;
+    weeklyResetsAt?: number | null;
 }
 /** Free local /usage report for whichever account is currently live. */
 /** Check usage for an account without swapping the active account. */
@@ -97,6 +116,8 @@ export declare function statusAll(): Array<{
     active: boolean;
     pct: number | null;
     resetsAt: number | null;
+    weeklyPct?: number | null;
+    weeklyResetsAt?: number | null;
 }>;
 /** Get all Claude installations that have saved accounts. */
 export declare function getAllInstalls(): string[];
