@@ -645,7 +645,7 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
     if (opts.noCron) {
         // Explicitly disabled
     }
-    else if (opts.installCron || promptYesNo("\nEnable automatic account priming with cron? ", true)) {
+    else if (opts.installCron || promptYesNo("\nEnable automatic account priming with cron?\n(Periodically pings accounts to keep 5-hour usage windows ticking) ", true)) {
         // Either --install-cron was set, or user said yes
         const cronCommand = claudeDir === defaultClaudeDir
             ? `${cmdPrefix} prime`
