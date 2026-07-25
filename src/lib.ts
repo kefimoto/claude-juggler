@@ -76,7 +76,7 @@ export interface Config {
   loadBalancingStrategy?: "off" | "drain-near-reset" | "smart-lowest"; // default "off"
   loadBalancingMinSwapInterval?: number; // in seconds, default 600 (10 min)
   loadBalancingMinUsageDelta?: number; // minimum % difference to swap, default 5
-  hookVerbosity?: "silent" | "on-autoswap" | "always-notify"; // default "on-autoswap"
+  hookVerbosity?: "silent" | "on-autoswap" | "always-notify"; // default "always-notify"
 }
 
 function readConfig(): Config {
@@ -131,7 +131,7 @@ export function getConfig(): { warningThreshold: number; autoswapThreshold: numb
     loadBalancingStrategy: cfg.loadBalancingStrategy ?? "off",
     loadBalancingMinSwapInterval: cfg.loadBalancingMinSwapInterval ?? 600,
     loadBalancingMinUsageDelta: cfg.loadBalancingMinUsageDelta ?? 5,
-    hookVerbosity: cfg.hookVerbosity ?? "on-autoswap",
+    hookVerbosity: cfg.hookVerbosity ?? "always-notify",
   };
 }
 

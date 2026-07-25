@@ -96,7 +96,7 @@ export function getConfig() {
         loadBalancingStrategy: cfg.loadBalancingStrategy ?? "off",
         loadBalancingMinSwapInterval: cfg.loadBalancingMinSwapInterval ?? 600,
         loadBalancingMinUsageDelta: cfg.loadBalancingMinUsageDelta ?? 5,
-        hookVerbosity: cfg.hookVerbosity ?? "on-autoswap",
+        hookVerbosity: cfg.hookVerbosity ?? "always-notify",
     };
 }
 export function setThresholds(warning, autoswap, strategy, cacheTTL, warningThrottle, lbStrategy, lbInterval, lbDelta, verbosity) {

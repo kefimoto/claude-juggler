@@ -109,7 +109,10 @@ Commands:
                              reported on the next hook call. The model will be notified.
                            set-lb-interval <seconds>: min seconds between swaps for smart-lowest (default 600)
                            set-lb-delta <percent>: min usage % difference for smart-lowest swap (default 5)
-                           set-hook-verbosity <silent|on-autoswap|always-notify>: hook notification level (default on-autoswap)
+                           set-hook-verbosity <silent|on-autoswap|always-notify>: hook notification level (default always-notify)
+                             silent: no notifications
+                             on-autoswap: only notify on autoswap threshold swaps
+                             always-notify: notify on all account swaps (autoswap + load balancing)
   prime                    Check every account; ping any at 0% used
                            so its 5h window starts ticking (for cron)
   check-threshold [pct]    Exit 1 and print a warning if the active
@@ -322,7 +325,7 @@ function main() {
                 console.log(`autoswapStrategy: ${cfg.autoswapStrategy}`);
                 console.log(`usageCacheTTL: ${cfg.usageCacheTTL}s`);
                 console.log(`warningThrottle: ${cfg.warningThrottleSeconds}s`);
-                console.log(`hookVerbosity: ${cfg.hookVerbosity} (silent|on-autoswap|always-notify)`);
+                console.log(`hookVerbosity: ${cfg.hookVerbosity}`);
                 console.log(`loadBalancingStrategy: ${cfg.loadBalancingStrategy}`);
                 if (cfg.loadBalancingStrategy !== "off") {
                     console.log(`  ↳ minSwapInterval: ${cfg.loadBalancingMinSwapInterval}s, minUsageDelta: ${cfg.loadBalancingMinUsageDelta}%`);
