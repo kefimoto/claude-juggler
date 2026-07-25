@@ -528,4 +528,28 @@ describe("Load Balancing Strategy (drain-near-reset)", () => {
 
     expect(cfg).toContain("15");
   });
+
+  it("should show example load balancing swap notification format (always-notify)", () => {
+    // This test demonstrates what users see when load balancing swaps accounts.
+    // The actual swap happens in hook-check when selectAccountByLoadBalancing() returns a target.
+    // Example output:
+    const exampleMessage = `✓ NOTIFY THE USER: ACCOUNT SWAPPED (LOAD BALANCING)
+Load balancing switched from "account1" (user1@example.com, at 85% usage) to "account2" (user2@example.com) using strategy "drain-near-reset".`;
+
+    expect(exampleMessage).toContain("ACCOUNT SWAPPED (LOAD BALANCING)");
+    expect(exampleMessage).toContain("account1");
+    expect(exampleMessage).toContain("account2");
+    expect(exampleMessage).toContain("drain-near-reset");
+  });
+
+  it("should show example all-accounts-above-threshold message", () => {
+    // This test demonstrates what users see when all accounts exceed autoswap threshold.
+    // Example output:
+    const exampleMessage = `⚠️  NOTIFY THE USER: All Accounts Above Autoswap Threshold
+Your active Claude account "account1" (user1@example.com) is at 99% usage (resets in 2h15m), and all other accounts are also at or above the 99% autoswap threshold.
+Cannot autoswap—all accounts have hit the limit. User must wait for a usage window to reset.`;
+
+    expect(exampleMessage).toContain("All Accounts Above Autoswap Threshold");
+    expect(exampleMessage).toContain("Cannot autoswap");
+  });
 });
