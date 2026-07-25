@@ -311,36 +311,33 @@ function zonedTimeToEpoch(monthDay, timeStr, tz) {
 /** Free local /usage report for whichever account is currently live. */
 /** Check usage for an account without swapping the active account. */
 export function checkUsageForAccount(account) {
-    // Create a temp config dir with this account's credentials
-    const tempDir = join(CONFIG_DIR, `.temp-${Date.now()}`);
+    // Create isolated temp config dir for this account (allows OS-level parallelization)
+    const tempDir = join(CONFIG_DIR, `.temp-${process.pid}-${Math.random().toString(36).slice(2)}`);
     try {
         mkdirSync(tempDir, { recursive: true });
-        // Write credentials
+        // Write .credentials.json with this account's token
         writeJSON(join(tempDir, ".credentials.json"), {
             claudeAiOauth: account.claudeAiOauth,
         }, 0o600);
-        // Write account info
+        // Write .claude.json with this account's oauth account info
         writeJSON(join(tempDir, ".claude.json"), {
             oauthAccount: account.oauthAccount,
         });
-        // Check usage against the temp config
-        const out = execFileSync("bash", ["-lc", `claude -p /usage --output-format json --settings "${tempDir}"`], {
+        // Run Claude in isolated config dir
+        const out = execFileSync("bash", ["-lc", `CLAUDE_CONFIG_DIR="${tempDir}" claude -p /usage --output-format json`], {
             encoding: "utf8",
             timeout: 15000,
             stdio: ["pipe", "pipe", "pipe"],
         });
-        let events;
+        let parsed;
         try {
-            events = JSON.parse(out);
+            parsed = JSON.parse(out);
         }
         catch {
             return { pct: null, resetsAt: null };
         }
-        const resultEvent = events.find((e) => e.type === "result");
-        const text = resultEvent?.result ?? "";
-        // The "· resets ..." clause is absent entirely when usage is 0% (no
-        // window running yet) - make it optional rather than requiring it, or
-        // parsing silently fails on exactly the case priming most needs to catch.
+        // Claude outputs a single JSON object with result field (not an array of events)
+        const text = parsed.result ?? "";
         const m = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
         if (!m)
             return { pct: null, resetsAt: null };
@@ -352,7 +349,6 @@ export function checkUsageForAccount(account) {
         return { pct: null, resetsAt: null };
     }
     finally {
-        // Clean up temp dir
         try {
             rmSync(tempDir, { recursive: true });
         }
