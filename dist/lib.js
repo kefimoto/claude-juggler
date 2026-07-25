@@ -25,6 +25,9 @@ export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const LOG_PATH = join(CONFIG_DIR, "prime.log");
 const LOCK_DIR = join(CONFIG_DIR, ".lock.d");
 const STATE_PATH = join(CONFIG_DIR, "state.json");
+// Every background Claude invocation we make — usage checks and priming pings —
+// is pinned to the cheapest model so juggler never burns the quota it measures.
+const BACKGROUND_MODEL = "haiku";
 const usageCache = new Map();
 // Global Claude directory - defaults to ~/.claude, can be overridden via CLAUDE_CONFIG_DIR env var or setClaudeDir()
 let globalClaudeDir = process.env.CLAUDE_CONFIG_DIR
@@ -503,7 +506,7 @@ export function checkUsageForAccount(account) {
             oauthAccount: account.oauthAccount,
         });
         // Run Claude in isolated config dir
-        const out = execFileSync("bash", ["-lc", `CLAUDE_CONFIG_DIR="${tempDir}" claude -p /usage --output-format json`], {
+        const out = execFileSync("bash", ["-lc", `CLAUDE_CONFIG_DIR="${tempDir}" claude -p /usage --model ${BACKGROUND_MODEL} --output-format json`], {
             encoding: "utf8",
             timeout: 15000,
             stdio: ["pipe", "pipe", "pipe"],
@@ -584,7 +587,7 @@ export function checkUsageForAccount(account) {
     }
 }
 export function checkUsage() {
-    const out = claude("-p /usage --output-format json");
+    const out = claude(`-p /usage --model ${BACKGROUND_MODEL} --output-format json`);
     let parsed;
     try {
         parsed = JSON.parse(out);
@@ -607,7 +610,7 @@ export function checkUsage() {
 }
 /** Send one trivial message on whichever account is currently live. */
 export function ping() {
-    claude("-p ok");
+    claude(`-p ok --model ${BACKGROUND_MODEL}`);
 }
 function logLine(msg) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
