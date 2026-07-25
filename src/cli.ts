@@ -52,7 +52,9 @@ function printStatusTable() {
   }
   for (const r of rows) {
     const marker = r.active ? "*" : " ";
-    console.log(`${marker} ${r.name.padEnd(16)} ${r.label}`);
+    const bold = r.active ? "\x1b[1m" : "";
+    const reset = r.active ? "\x1b[0m" : "";
+    console.log(`${marker} ${bold}${r.name.padEnd(16)}${reset} ${r.label}`);
     console.log(`  ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
   }
 }
@@ -247,7 +249,9 @@ function main(): void {
         }
         for (const r of install.accounts) {
           const marker = r.active ? "*" : " ";
-          console.log(`  ${marker} ${r.name.padEnd(16)} ${r.label}`);
+          const bold = r.active ? "\x1b[1m" : "";
+          const reset = r.active ? "\x1b[0m" : "";
+          console.log(`  ${marker} ${bold}${r.name.padEnd(16)}${reset} ${r.label}`);
           console.log(`    ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
         }
       }
