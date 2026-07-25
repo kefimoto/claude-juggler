@@ -371,13 +371,9 @@ export function selectAccountByLoadBalancing() {
         if (candidate)
             return candidate.name;
         // Second pass: among live windows, prioritize highest session usage (closest to reset)
-        // that doesn't exhaust weekly quota
+        // Autoswap threshold already prevents exhausting weekly quota when needed
         for (const r of enabledAccounts) {
             if (r.pct === null || r.resetsAt === null)
-                continue;
-            // Guard: skip if weekly is near exhaustion (>90%)
-            const weeklyPct = r.weeklyPct ?? 0;
-            if (weeklyPct > 90)
                 continue;
             if (candidate === null || r.pct > (candidate.pct ?? 0)) {
                 candidate = r;
