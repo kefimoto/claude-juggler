@@ -43,8 +43,8 @@ Commands:
   prev                     Switch to the previous account in rotation
   lowest                   Switch to the lowest-usage account
   current                  Print the currently active account name
-  list-all-installs        List all Claude installations with saved accounts
-  status-all-installs      Show status across all Claude installations
+  list-all                 List all Claude installations with saved accounts
+  status-all               Show status across all Claude installations
   install [OPTIONS]        Configure /swap and /accounts Claude Code commands and hook
                            Options:
                              --install-cron: setup cron job
@@ -131,7 +131,7 @@ function main() {
             console.log(name ?? "(none)");
             break;
         }
-        case "list-all-installs": {
+        case "list-all": {
             const installs = listAllInstalls();
             if (installs.length === 0) {
                 console.log("No Claude installations with saved accounts found.");
@@ -143,7 +143,7 @@ function main() {
             }
             break;
         }
-        case "status-all-installs": {
+        case "status-all": {
             const installs = listAllInstalls();
             if (installs.length === 0) {
                 console.log("No Claude installations with saved accounts found.");
