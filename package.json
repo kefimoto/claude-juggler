@@ -1,16 +1,17 @@
 {
   "name": "claude-juggler",
-  "version": "0.1.0-beta.26",
-  "description": "Switch between multiple Claude Code accounts instantly, in-session, no browser required. CLI + Claude Code commands + optional auto-stop-at-threshold hook.",
-  "license": "MIT",
-  "type": "module",
+  "version": "0.1.0-beta.27",
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^26.1.1",
+    "husky": "^9.1.7",
+    "typescript": "^5.0.0"
+  },
   "bin": {
     "claude-juggler": "bin/claude-juggler",
     "juggler": "bin/claude-juggler"
   },
-  "scripts": {
-    "build": "tsc"
-  },
+  "description": "Switch between multiple Claude Code accounts instantly, in-session, no browser required. CLI + Claude Code commands + optional auto-stop-at-threshold hook.",
   "files": [
     "dist",
     "src",
@@ -19,12 +20,6 @@
     "README.md",
     "LICENSE"
   ],
-  "devDependencies": {
-    "@types/bun": "^1.3.14",
-    "@types/node": "^26.1.1",
-    "husky": "^9.1.7",
-    "typescript": "^5.0.0"
-  },
   "keywords": [
     "claude",
     "claude-code",
@@ -32,7 +27,9 @@
     "oauth",
     "account-switching"
   ],
-  "dependencies": {
-    "claude-juggler": "^0.1.0-beta.1"
-  }
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc"
+  },
+  "type": "module"
 }
