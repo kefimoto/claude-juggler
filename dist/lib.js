@@ -382,6 +382,28 @@ export function install() {
     const claudeDir = join(homedir(), ".claude");
     const commandsDir = join(claudeDir, "commands");
     const settingsPath = join(claudeDir, "settings.json");
+    // Determine installation method by checking if claude-juggler is globally available
+    let installMethod = "global";
+    try {
+        execFileSync("which", ["claude-juggler"], { encoding: "utf8", timeout: 1000, stdio: "pipe" });
+        // If we get here, claude-juggler is in PATH (globally installed)
+        installMethod = "global";
+    }
+    catch {
+        // Not globally installed, must be via bunx or npx
+        // Try to detect which by checking if we're in a temp directory
+        const scriptPath = process.argv[1] || "";
+        if (scriptPath.includes("bunx") || scriptPath.includes(".bun") || scriptPath.includes("/tmp/bunx")) {
+            installMethod = "bunx";
+        }
+        else {
+            installMethod = "npx";
+        }
+    }
+    // Save installation method to config
+    const cfg = readConfig();
+    cfg.installMethod = installMethod;
+    writeConfig(cfg);
     // Determine hook script path: find the package root by walking up from this file
     let pkgRoot = __dirname;
     while (!existsSync(join(pkgRoot, "package.json"))) {
@@ -395,22 +417,30 @@ export function install() {
         throw new Error(`Hook script not found at ${hookScript}`);
     // Create commands directory if needed
     mkdirSync(commandsDir, { recursive: true });
+    // Generate command prefix based on installation method
+    let cmdPrefix = "claude-juggler";
+    if (installMethod === "bunx") {
+        cmdPrefix = "bunx claude-juggler@beta";
+    }
+    else if (installMethod === "npx") {
+        cmdPrefix = "npx claude-juggler@beta";
+    }
     // Write swap command
     const swapCmd = `---
 description: Swap the active Claude account
 allowed-tools: Bash(claude-juggler:*)
 ---
 
-!\`claude-juggler status\`
+!\`${cmdPrefix} status\`
 
 If no accounts are shown, tell the user to run:
-\`claude-juggler add <name>\` (right after logging into another account with \`claude auth login\`)
+\`${cmdPrefix} add <name>\` (right after logging into another account with \`claude auth login\`)
 
 Otherwise, ask the user (AskUserQuestion) how they want to swap:
-- "Next" → run \`claude-juggler next\`
-- "Previous" → run \`claude-juggler prev\`
-- "Lowest usage" → run \`claude-juggler lowest\`
-- Specific account name → run \`claude-juggler use <name>\`
+- "Next" → run \`${cmdPrefix} next\`
+- "Previous" → run \`${cmdPrefix} prev\`
+- "Lowest usage" → run \`${cmdPrefix} lowest\`
+- Specific account name → run \`${cmdPrefix} use <name>\`
 
 Once the swap completes, tell the user:
 1. That the swap succeeded, naming the new account.
@@ -427,12 +457,12 @@ description: Show all saved accounts' usage % and time-to-reset
 allowed-tools: Bash(claude-juggler status:*)
 ---
 
-!\`claude-juggler status\`
+!\`${cmdPrefix} status\`
 
 Present the table above to the user in plain language: which account is
 currently active (marked with *), and each account's usage % and time until
 its window resets. If any account is empty (no accounts saved), tell the
-user to run \`claude-juggler add <name>\` after logging in.
+user to run \`${cmdPrefix} add <name>\` after logging in.
 `;
     writeFileSync(join(commandsDir, "accounts.md"), accountsCmd);
     // Update settings.json hook
@@ -456,9 +486,27 @@ user to run \`claude-juggler add <name>\` after logging in.
         timeout: 10,
     });
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    // Update prime-cron.sh with the correct command
+    let primeCronCmd = "claude-juggler prime";
+    if (installMethod === "bunx") {
+        primeCronCmd = "bunx claude-juggler@beta prime";
+    }
+    else if (installMethod === "npx") {
+        primeCronCmd = "npx claude-juggler@beta prime";
+    }
+    const primeCronPath = join(pkgRoot, "bin/prime-cron.sh");
+    if (existsSync(primeCronPath)) {
+        const primeCron = `#!/usr/bin/env bash
+# Cron entry point for \`claude-juggler prime\`. Sources shell rc to get full PATH.
+bash -lc '${primeCronCmd}'
+`;
+        writeFileSync(primeCronPath, primeCron, { mode: 0o755 });
+    }
     console.log("✓ Created ~/.claude/commands/swap.md");
     console.log("✓ Created ~/.claude/commands/accounts.md");
     console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookScript}`);
+    if (existsSync(primeCronPath))
+        console.log(`✓ Updated ${primeCronPath}`);
     console.log("\nSetup complete! Use /swap and /accounts in Claude Code, or run: claude-juggler [add|list|use|status]");
 }
 /** Remove Claude Code integration and config. */
