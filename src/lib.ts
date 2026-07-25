@@ -400,8 +400,16 @@ export function checkUsageForAccount(account: AccountData): UsageResult {
       return { pct: null, resetsAt: null };
     }
 
-    // Claude outputs a single JSON object with result field (not an array of events)
-    const text: string = parsed.result ?? "";
+    // Handle both array format (new) and single object format (old)
+    let text: string = "";
+    if (Array.isArray(parsed)) {
+      // New array format: find the result object
+      const resultObj = parsed.find((item: any) => item.type === "result");
+      text = resultObj?.result ?? "";
+    } else {
+      // Old single-object format
+      text = parsed.result ?? "";
+    }
 
     const m =
       /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(
