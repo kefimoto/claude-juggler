@@ -613,14 +613,15 @@ export function install(options: InstallOptions | boolean = {}): void {
     const ppid = process.ppid;
     if (ppid) {
       const cmdLine = fs.readFileSync(`/proc/${ppid}/cmdline`, "utf8").split("\0").join(" ");
-      if (cmdLine.includes("bunx")) {
+      // Check for bunx or npx COMMANDS, not just the string "bun" (which appears in global bun installs too)
+      if (/\bbunx\b/.test(cmdLine) || /\bbunx\//.test(cmdLine) || / bunx /.test(cmdLine)) {
         installMethod = "bunx";
-      } else if (cmdLine.includes("npx")) {
+      } else if (/\bnpx\b/.test(cmdLine) || /\bnpx\//.test(cmdLine) || / npx /.test(cmdLine)) {
         installMethod = "npx";
       } else {
         // Check script path as fallback
         const scriptPath = process.argv[1] || "";
-        if (scriptPath.includes("bunx") || scriptPath.includes(".bun") || scriptPath.includes("/tmp/bunx")) {
+        if (scriptPath.includes("bunx") || scriptPath.includes("/tmp/bunx")) {
           installMethod = "bunx";
         } else if (scriptPath.includes("npx")) {
           installMethod = "npx";
