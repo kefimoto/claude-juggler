@@ -31,7 +31,8 @@ function printStatusTable() {
     }
     for (const r of rows) {
         const marker = r.active ? "*" : " ";
-        console.log(`${marker} ${r.name.padEnd(16)} ${r.label.padEnd(28)} ${fmtUsageBar(r.pct).padEnd(35)} resets in ${fmtResetsIn(r.resetsAt)}`);
+        console.log(`${marker} ${r.name.padEnd(16)} ${r.label}`);
+        console.log(`  ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
     }
 }
 function usage() {
@@ -228,7 +229,8 @@ function main() {
                 }
                 for (const r of install.accounts) {
                     const marker = r.active ? "*" : " ";
-                    console.log(`  ${marker} ${r.name.padEnd(16)} ${r.label.padEnd(28)} ${fmtUsageBar(r.pct).padEnd(35)} resets in ${fmtResetsIn(r.resetsAt)}`);
+                    console.log(`  ${marker} ${r.name.padEnd(16)} ${r.label}`);
+                    console.log(`    ${fmtUsageBar(r.pct)}  resets in ${fmtResetsIn(r.resetsAt)}`);
                 }
             }
             break;

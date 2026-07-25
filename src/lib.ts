@@ -39,8 +39,6 @@ export function setClaudeDir(dir: string): void {
 // Unified accounts file: { "/path/to/claude": { "name": account_data, ... }, ... }
 export const ACCOUNTS_FILE = join(CONFIG_DIR, "accounts.json");
 
-// Unified state file: { "/path/to/claude": { "active": "name" }, ... }
-export const STATE_FILE = join(CONFIG_DIR, "state.json");
 
 // Get credentials path for current Claude install
 function getCredsPath(): string {
@@ -106,10 +104,6 @@ export interface AccountData {
   priming?: boolean; // Whether to prime this account (default true)
 }
 
-interface StateFile {
-  active: string | null;
-}
-
 function readJSON<T = any>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -129,14 +123,9 @@ interface AccountsFile {
   };
 }
 
-interface StateFileData {
-  [claudeDir: string]: StateFile;
-}
-
 function ensureConfigDir(): void {
   mkdirSync(CONFIG_DIR, { recursive: true });
   if (!existsSync(ACCOUNTS_FILE)) writeJSON(ACCOUNTS_FILE, {} as AccountsFile);
-  if (!existsSync(STATE_FILE)) writeJSON(STATE_FILE, {} as StateFileData);
 }
 
 function getAccountsForCurrentDir(): { [name: string]: AccountData } {
@@ -145,24 +134,11 @@ function getAccountsForCurrentDir(): { [name: string]: AccountData } {
   return allAccounts[globalClaudeDir] || {};
 }
 
-function getStateForCurrentDir(): StateFile {
-  ensureConfigDir();
-  const allState = readJSON<StateFileData>(STATE_FILE);
-  return allState[globalClaudeDir] || { active: null };
-}
-
 function saveAccountsForCurrentDir(accounts: { [name: string]: AccountData }): void {
   ensureConfigDir();
   const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
   allAccounts[globalClaudeDir] = accounts;
   writeJSON(ACCOUNTS_FILE, allAccounts);
-}
-
-function saveStateForCurrentDir(state: StateFile): void {
-  ensureConfigDir();
-  const allState = readJSON<StateFileData>(STATE_FILE);
-  allState[globalClaudeDir] = state;
-  writeJSON(STATE_FILE, allState);
 }
 
 export function listAccounts(): string[] {
@@ -215,7 +191,7 @@ export function groundTruthAccount(): string | null {
 }
 
 export function currentAccount(): string | null {
-  return getStateForCurrentDir().active;
+  return groundTruthAccount();
 }
 
 /** Capture the CURRENTLY LIVE credentials as a new named account. Run this
@@ -247,12 +223,6 @@ export function addAccount(name: string, priming?: boolean): AccountData {
   const accounts = getAccountsForCurrentDir();
   accounts[name] = data;
   saveAccountsForCurrentDir(accounts);
-
-  const state = getStateForCurrentDir();
-  if (state.active === null) {
-    state.active = name;
-    saveStateForCurrentDir(state);
-  }
   return data;
 }
 
@@ -261,13 +231,6 @@ export function removeAccount(name: string): void {
   if (!accounts[name]) throw new Error(`No account named ${name}.`);
   delete accounts[name];
   saveAccountsForCurrentDir(accounts);
-
-  // If this was the active account, clear the active pointer
-  const state = getStateForCurrentDir();
-  if (state.active === name) {
-    state.active = null;
-    saveStateForCurrentDir(state);
-  }
 }
 
 export function setPriming(name: string, enabled: boolean): boolean {
@@ -289,20 +252,8 @@ export function activate(targetName: string, quiet = false): string {
     throw new Error(`No account named ${targetName}. Known accounts: ${listAccounts().join(", ") || "(none)"}`);
   }
 
-  const state = getStateForCurrentDir();
-  const claimedName = state.active;
-
-  if (claimedName !== null) {
-    const realName = groundTruthAccount();
-    if (realName !== claimedName) {
-      throw new Error(
-        `ABORT: state claims ${claimedName} is live, but the live token ` +
-          `actually matches ${realName ?? "an UNKNOWN account"}. Not touching any account file.`
-      );
-    }
-  }
-
-  if (claimedName === targetName) {
+  const currentName = groundTruthAccount();
+  if (currentName === targetName) {
     if (!quiet) console.log(`Already on ${targetName}.`);
     return targetName;
   }
@@ -310,10 +261,9 @@ export function activate(targetName: string, quiet = false): string {
   const creds = readJSON<{ claudeAiOauth: OauthToken }>(getCredsPath());
   const live = readJSON<{ oauthAccount: Record<string, unknown> }>(getClaudeJsonPath());
 
-  // 1. Re-capture the CURRENT account's live TOKEN before leaving it (tokens
-  // rotate). Identity is deliberately NOT re-derived here - see file header.
-  if (claimedName !== null) {
-    accounts[claimedName].claudeAiOauth = creds.claudeAiOauth;
+  // 1. Re-capture the CURRENT account's live TOKEN before leaving it (tokens rotate).
+  if (currentName !== null) {
+    accounts[currentName].claudeAiOauth = creds.claudeAiOauth;
     saveAccountsForCurrentDir(accounts);
   }
 
@@ -325,13 +275,9 @@ export function activate(targetName: string, quiet = false): string {
   live.oauthAccount = target.oauthAccount;
   writeJSON(getClaudeJsonPath(), live);
 
-  // 3. Update the active pointer.
-  state.active = targetName;
-  saveStateForCurrentDir(state);
-
   if (!quiet) {
-    const fromLabel = claimedName ? accounts[claimedName].label : "(none)";
-    console.log(`Swapped ${claimedName ?? "(none)"} (${fromLabel}) -> ${targetName} (${target.label})`);
+    const fromLabel = currentName ? accounts[currentName].label : "(none)";
+    console.log(`Swapped ${currentName ?? "(none)"} (${fromLabel}) -> ${targetName} (${target.label})`);
   }
   return targetName;
 }
@@ -530,10 +476,15 @@ export function listAccountsForInstall(claudeDir: string): string[] {
 
 /** Get the active account for a specific Claude installation. */
 export function getCurrentAccountForInstall(claudeDir: string): string | null {
-  ensureConfigDir();
-  if (!existsSync(STATE_FILE)) return null;
-  const allState = readJSON<StateFileData>(STATE_FILE);
-  return allState[claudeDir]?.active || null;
+  const prevDir = globalClaudeDir;
+  try {
+    setClaudeDir(claudeDir);
+    return groundTruthAccount();
+  } catch {
+    return null;
+  } finally {
+    setClaudeDir(prevDir);
+  }
 }
 
 /** Get all accounts for a specific Claude installation without changing active dir. */
@@ -547,27 +498,41 @@ export function getAccountsForInstall(claudeDir: string): { [name: string]: Acco
 /** List all Claude installations with their account counts. */
 export function listAllInstalls(): Array<{ claudeDir: string; accounts: string[]; active: string | null }> {
   ensureConfigDir();
-  if (!existsSync(ACCOUNTS_FILE) || !existsSync(STATE_FILE)) return [];
+  if (!existsSync(ACCOUNTS_FILE)) return [];
 
   const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
-  const allState = readJSON<StateFileData>(STATE_FILE);
+  const results: Array<{ claudeDir: string; accounts: string[]; active: string | null }> = [];
 
-  return Object.keys(allAccounts)
-    .sort()
-    .map(claudeDir => ({
-      claudeDir,
-      accounts: Object.keys(allAccounts[claudeDir] || {}),
-      active: allState[claudeDir]?.active || null,
-    }));
+  for (const claudeDir of Object.keys(allAccounts).sort()) {
+    const prevDir = globalClaudeDir;
+    try {
+      setClaudeDir(claudeDir);
+      const active = groundTruthAccount();
+      results.push({
+        claudeDir,
+        accounts: Object.keys(allAccounts[claudeDir] || {}),
+        active,
+      });
+    } catch {
+      // Skip installations that can't be checked
+      results.push({
+        claudeDir,
+        accounts: Object.keys(allAccounts[claudeDir] || {}),
+        active: null,
+      });
+    } finally {
+      setClaudeDir(prevDir);
+    }
+  }
+  return results;
 }
 
 /** Get status (usage + reset time) for all accounts across all installations. */
 export function statusAllInstalls(): Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> {
   ensureConfigDir();
-  if (!existsSync(ACCOUNTS_FILE) || !existsSync(STATE_FILE)) return [];
+  if (!existsSync(ACCOUNTS_FILE)) return [];
 
   const allAccounts = readJSON<AccountsFile>(ACCOUNTS_FILE);
-  const allState = readJSON<StateFileData>(STATE_FILE);
   const results: Array<{ claudeDir: string; accounts: Array<{ name: string; label: string; active: boolean; pct: number | null; resetsAt: number | null }> }> = [];
 
   for (const claudeDir of Object.keys(allAccounts).sort()) {
@@ -994,12 +959,6 @@ export function uninstall(): void {
     delete allAccounts[claudeDir];
     writeJSON(ACCOUNTS_FILE, allAccounts);
     console.log(`✓ Removed account storage for this installation`);
-  }
-
-  const allState = readJSON<StateFileData>(STATE_FILE);
-  if (allState[claudeDir]) {
-    delete allState[claudeDir];
-    writeJSON(STATE_FILE, allState);
   }
 
   console.log("\nUninstall complete!");

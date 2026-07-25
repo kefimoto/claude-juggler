@@ -20,7 +20,6 @@ export declare const CONFIG_PATH: string;
 export declare const LOG_PATH: string;
 export declare function setClaudeDir(dir: string): void;
 export declare const ACCOUNTS_FILE: string;
-export declare const STATE_FILE: string;
 export interface Config {
     warningThreshold?: number;
     autoswapThreshold?: number | null;
