@@ -17,9 +17,9 @@ function fmtResetsIn(resetsAt) {
 function fmtUsageBar(pct) {
     const barWidth = 20;
     if (pct === null) {
-        // Show red bar for error state
-        const bar = "█".repeat(barWidth);
-        return `\x1b[31m${bar}\x1b[0m err`;
+        // Show unfilled red bar for error state (no data)
+        const bar = `\x1b[31m${"░".repeat(barWidth)}\x1b[0m`;
+        return `${bar} err`;
     }
     const filled = Math.round((pct / 100) * barWidth);
     let color = "\x1b[32m"; // green
