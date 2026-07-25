@@ -578,42 +578,26 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
     (h: any) => !h.command || !h.command.includes("check-usage-hook")
   );
 
-  // Add the hook
+  // Add the hook using portable command prefix, not file path
+  const hookCommand = `${cmdPrefix} hook-check`;
   hookEntry.hooks.push({
     type: "command",
-    command: hookScript,
+    command: hookCommand,
     timeout: 10,
   });
 
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 
-  // Update prime-cron.sh with the correct command
-  let primeCronCmd = "claude-juggler prime";
-  if (installMethod === "bunx") {
-    primeCronCmd = "bunx claude-juggler@beta prime";
-  } else if (installMethod === "npx") {
-    primeCronCmd = "npx claude-juggler@beta prime";
-  }
-
-  const primeCronPath = join(pkgRoot, "bin/prime-cron.sh");
-  if (existsSync(primeCronPath)) {
-    const primeCron = `#!/usr/bin/env bash
-# Cron entry point for \`claude-juggler prime\`. Sources shell rc to get full PATH.
-bash -lc '${primeCronCmd}'
-`;
-    writeFileSync(primeCronPath, primeCron, { mode: 0o755 });
-  }
-
   console.log("✓ Created ~/.claude/commands/swap.md");
   console.log("✓ Created ~/.claude/commands/accounts.md");
-  console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookScript}`);
-  if (existsSync(primeCronPath)) console.log(`✓ Updated ${primeCronPath}`);
+  console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookCommand}`);
 
   // Setup cron job only if BOTH flags are set (non-interactive mode)
   if (opts.installCron && opts.claudeDir) {
-    // Both flags set: fully non-interactive, auto-install cron
-    setupCron(primeCronPath);
-    console.log("✓ Added cron job: */20 * * * * " + primeCronPath);
+    // Both flags set: fully non-interactive, auto-install cron with portable command
+    const cronCommand = `${cmdPrefix} prime`;
+    setupCron(cronCommand);
+    console.log(`✓ Added cron job: */20 * * * * ${cronCommand}`);
   } else if (!opts.noCron) {
     // Interactive mode: suggest cron setup
     console.log("\nTo enable automatic account priming, run:");
@@ -629,7 +613,7 @@ function shouldSetupCron(): boolean {
   return false;
 }
 
-function setupCron(scriptPath: string): void {
+function setupCron(command: string): void {
   try {
     // Get current crontab
     let crontab = "";
@@ -640,13 +624,13 @@ function setupCron(scriptPath: string): void {
       crontab = "";
     }
 
-    // Check if already exists
-    if (crontab.includes(scriptPath)) {
+    // Check if already exists (by checking if this command is already in crontab)
+    if (crontab.includes("claude-juggler prime") || crontab.includes("bunx claude-juggler") || crontab.includes("npx claude-juggler")) {
       return; // Already configured
     }
 
     // Add new cron entry
-    const newEntry = `*/20 * * * * ${scriptPath}\n`;
+    const newEntry = `*/20 * * * * ${command}\n`;
     const newCrontab = crontab + newEntry;
 
     // Write new crontab
