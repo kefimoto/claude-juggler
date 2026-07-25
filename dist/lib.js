@@ -24,6 +24,7 @@ export const CONFIG_DIR = process.env.CLAUDE_JUGGLER_DIR || join(homedir(), ".cl
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const LOG_PATH = join(CONFIG_DIR, "prime.log");
 const LOCK_DIR = join(CONFIG_DIR, ".lock.d");
+const usageCache = new Map();
 // Global Claude directory - defaults to ~/.claude, can be overridden via CLAUDE_CONFIG_DIR env var or setClaudeDir()
 let globalClaudeDir = process.env.CLAUDE_CONFIG_DIR
     ? process.env.CLAUDE_CONFIG_DIR.replace(/^~/, homedir())
@@ -60,9 +61,10 @@ export function getConfig() {
         warningThreshold: cfg.warningThreshold ?? 95,
         autoswapThreshold: cfg.autoswapThreshold === undefined ? 99 : cfg.autoswapThreshold,
         autoswapStrategy: cfg.autoswapStrategy ?? "lowest",
+        usageCacheTTL: cfg.usageCacheTTL ?? 30,
     };
 }
-export function setThresholds(warning, autoswap, strategy) {
+export function setThresholds(warning, autoswap, strategy, cacheTTL) {
     const cfg = readConfig();
     if (warning !== undefined)
         cfg.warningThreshold = warning;
@@ -70,10 +72,12 @@ export function setThresholds(warning, autoswap, strategy) {
         cfg.autoswapThreshold = autoswap;
     if (strategy !== undefined)
         cfg.autoswapStrategy = strategy;
+    if (cacheTTL !== undefined)
+        cfg.usageCacheTTL = cacheTTL;
     writeConfig(cfg);
     const final = getConfig();
     const swapStr = final.autoswapThreshold === null ? "disabled" : `${final.autoswapThreshold}% (${final.autoswapStrategy})`;
-    console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}`);
+    console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s`);
 }
 function readJSON(path) {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -264,6 +268,11 @@ export function lowestUsageAccount() {
     }
     return lowest.name;
 }
+/** Check if all accounts are at or above the given threshold. */
+export function allAccountsAboveThreshold(threshold) {
+    const rows = statusAll();
+    return rows.every((r) => r.pct === null || r.pct >= threshold);
+}
 function claude(args) {
     // bash -lc sources shell rc files (nvm init etc.) so `claude` resolves
     // under cron's minimal PATH, not just interactively.
@@ -311,6 +320,16 @@ function zonedTimeToEpoch(monthDay, timeStr, tz) {
 /** Free local /usage report for whichever account is currently live. */
 /** Check usage for an account without swapping the active account. */
 export function checkUsageForAccount(account) {
+    // Check cache first
+    const cacheKey = createHash("sha256").update(account.claudeAiOauth.accessToken).digest("hex");
+    const cached = usageCache.get(cacheKey);
+    if (cached) {
+        const age = (Date.now() - cached.timestamp) / 1000;
+        const ttl = getConfig().usageCacheTTL;
+        if (age < ttl) {
+            return cached.result;
+        }
+    }
     // Create isolated temp config dir for this account (allows OS-level parallelization)
     const tempDir = join(CONFIG_DIR, `.temp-${process.pid}-${Math.random().toString(36).slice(2)}`);
     try {
@@ -334,7 +353,9 @@ export function checkUsageForAccount(account) {
             parsed = JSON.parse(out);
         }
         catch {
-            return { pct: null, resetsAt: null };
+            const result = { pct: null, resetsAt: null };
+            usageCache.set(cacheKey, { result, timestamp: Date.now() });
+            return result;
         }
         // Handle both array format (new) and single object format (old)
         let text = "";
@@ -348,8 +369,11 @@ export function checkUsageForAccount(account) {
             text = parsed.result ?? "";
         }
         const m = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
-        if (!m)
-            return { pct: null, resetsAt: null };
+        if (!m) {
+            const result = { pct: null, resetsAt: null };
+            usageCache.set(cacheKey, { result, timestamp: Date.now() });
+            return result;
+        }
         // Check if Claude refreshed the token in the temp dir and sync it back
         try {
             const refreshedCreds = readJSON(join(tempDir, ".credentials.json"));
@@ -384,10 +408,14 @@ export function checkUsageForAccount(account) {
         }
         const pct = Number(m[1]);
         const resetsAt = m[2] ? zonedTimeToEpoch(m[2], m[3], m[4]) : null;
-        return { pct, resetsAt };
+        const result = { pct, resetsAt };
+        usageCache.set(cacheKey, { result, timestamp: Date.now() });
+        return result;
     }
     catch {
-        return { pct: null, resetsAt: null };
+        const result = { pct: null, resetsAt: null };
+        usageCache.set(cacheKey, { result, timestamp: Date.now() });
+        return result;
     }
     finally {
         try {

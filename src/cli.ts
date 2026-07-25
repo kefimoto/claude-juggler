@@ -25,6 +25,7 @@ import {
   setPriming,
   checkUsage,
   getAccountsForCurrentDir,
+  allAccountsAboveThreshold,
 } from "./lib";
 
 function fmtResetsIn(resetsAt: number | null): string {
@@ -96,12 +97,13 @@ Commands:
                              --no-cron: don't setup cron job
   uninstall                Remove Claude Code integration for current installation
   uninstall-all            Remove Claude Code integration for all installations
-  config [show|set-warning|set-autoswap|set-strategy]
-                           View or edit warning/autoswap thresholds
+  config [show|set-warning|set-autoswap|set-strategy|set-cache-ttl]
+                           View or edit config
                            show: display current config
                            set-warning <pct>: set warning threshold
                            set-autoswap <pct|off>: set autoswap or disable
                            set-strategy <next|prev|lowest>: set autoswap behavior
+                           set-cache-ttl <seconds>: set usage cache TTL (default 30)
   prime                    Check every account; ping any at 0% used
                            so its 5h window starts ticking (for cron)
   check-threshold [pct]    Exit 1 and print a warning if the active
@@ -301,6 +303,7 @@ function main(): void {
         console.log(`warningThreshold: ${cfg.warningThreshold}%`);
         console.log(`autoswapThreshold: ${cfg.autoswapThreshold === null ? "disabled" : cfg.autoswapThreshold + "%"}`);
         console.log(`autoswapStrategy: ${cfg.autoswapStrategy}`);
+        console.log(`usageCacheTTL: ${cfg.usageCacheTTL}s`);
       } else if (subCmd === "set-warning") {
         const val = Number(rest[1]);
         if (isNaN(val) || val < 0 || val > 100) {
@@ -322,8 +325,15 @@ function main(): void {
           process.exit(1);
         }
         setThresholds(undefined, undefined, strat);
+      } else if (subCmd === "set-cache-ttl") {
+        const val = Number(rest[1]);
+        if (isNaN(val) || val < 1) {
+          console.error("Cache TTL must be >= 1 second");
+          process.exit(1);
+        }
+        setThresholds(undefined, undefined, undefined, val);
       } else {
-        console.error("Unknown config subcommand. Use: show, set-warning, set-autoswap, set-strategy");
+        console.error("Unknown config subcommand. Use: show, set-warning, set-autoswap, set-strategy, set-cache-ttl");
         process.exit(1);
       }
       break;
@@ -370,6 +380,23 @@ function main(): void {
 
         // Autoswap if at or above autoswap threshold
         if (autoswapThreshold !== null && pct >= autoswapThreshold) {
+          // Check if all accounts are above the threshold
+          if (allAccountsAboveThreshold(autoswapThreshold)) {
+            // All accounts are above threshold, don't swap, just warn
+            const context =
+              `⚠️  NOTIFY THE USER: All Accounts Above Autoswap Threshold\n` +
+              `Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
+              `(resets in ${fmtResetsIn(resetsAt)}), and all other accounts are also at or above ` +
+              `the ${autoswapThreshold}% autoswap threshold.\n` +
+              `Cannot autoswap—all accounts have hit the limit. User must wait for a usage window to reset.`;
+            console.log(
+              JSON.stringify({
+                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+              })
+            );
+            process.exit(0);
+            break;
+          }
           let targetName: string;
           try {
             if (cfg.autoswapStrategy === "next") {
@@ -400,31 +427,15 @@ function main(): void {
           const newName = currentAccount();
           const newLabel = accountsData[newName || ""]?.label || newName || "unknown";
 
-          // Check if we ended up on the same account (all accounts above threshold)
-          if (newName === currentName) {
-            const context =
-              `🚨 CRITICAL: NOTIFY THE USER 🚨\n` +
-              `Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
-              `(resets in ${fmtResetsIn(resetsAt)}), and ALL other accounts are also at or above ` +
-              `the ${autoswapThreshold}% autoswap threshold.\n` +
-              `Cannot autoswap—all accounts have hit the limit. User must wait for a usage window to reset, ` +
-              `or use /swap to manually select a lower-usage account.`;
-            console.log(
-              JSON.stringify({
-                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-              })
-            );
-          } else {
-            const context =
-              `✓ NOTIFY THE USER: ACCOUNT SWAPPED\n` +
-              `Automatically switched from "${currentName}" (${label}, was at ${pct}% usage) ` +
-              `to "${newName}" (${newLabel}) using strategy "${cfg.autoswapStrategy}".`;
-            console.log(
-              JSON.stringify({
-                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-              })
-            );
-          }
+          const context =
+            `✓ NOTIFY THE USER: ACCOUNT SWAPPED\n` +
+            `Automatically switched from "${currentName}" (${label}, was at ${pct}% usage) ` +
+            `to "${newName}" (${newLabel}) using strategy "${cfg.autoswapStrategy}".`;
+          console.log(
+            JSON.stringify({
+              hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+            })
+          );
         }
         // Warn if at or above warning threshold
         else if (pct >= warningThreshold) {

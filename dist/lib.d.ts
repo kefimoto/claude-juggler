@@ -25,13 +25,15 @@ export interface Config {
     autoswapThreshold?: number | null;
     autoswapStrategy?: "next" | "prev" | "lowest";
     commandPrefix?: string;
+    usageCacheTTL?: number;
 }
 export declare function getConfig(): {
     warningThreshold: number;
     autoswapThreshold: number | null;
     autoswapStrategy: "next" | "prev" | "lowest";
+    usageCacheTTL: number;
 };
-export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest"): void;
+export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number): void;
 export interface OauthToken {
     accessToken: string;
     [key: string]: unknown;
@@ -66,6 +68,8 @@ export declare function activate(targetName: string, quiet?: boolean): string;
 export declare function nextAccount(): string;
 export declare function prevAccount(): string;
 export declare function lowestUsageAccount(): string;
+/** Check if all accounts are at or above the given threshold. */
+export declare function allAccountsAboveThreshold(threshold: number): boolean;
 export declare function verifyStatus(): void;
 export interface UsageResult {
     pct: number | null;
