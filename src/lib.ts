@@ -67,6 +67,8 @@ export interface Config {
   autoswapStrategy?: "next" | "prev" | "lowest";
   commandPrefix?: string;
   usageCacheTTL?: number; // in seconds, default 30
+  warningThrottleSeconds?: number; // in seconds, default 300 (5 min)
+  lastWarningTimestamp?: number; // epoch seconds, for tracking throttle
 }
 
 function readConfig(): Config {
@@ -79,26 +81,43 @@ function writeConfig(config: Config): void {
   writeJSON(CONFIG_PATH, config);
 }
 
-export function getConfig(): { warningThreshold: number; autoswapThreshold: number | null; autoswapStrategy: "next" | "prev" | "lowest"; usageCacheTTL: number } {
+export function getConfig(): { warningThreshold: number; autoswapThreshold: number | null; autoswapStrategy: "next" | "prev" | "lowest"; usageCacheTTL: number; warningThrottleSeconds: number } {
   const cfg = readConfig();
   return {
     warningThreshold: cfg.warningThreshold ?? 95,
     autoswapThreshold: cfg.autoswapThreshold === undefined ? 99 : cfg.autoswapThreshold,
     autoswapStrategy: cfg.autoswapStrategy ?? "lowest",
     usageCacheTTL: cfg.usageCacheTTL ?? 30,
+    warningThrottleSeconds: cfg.warningThrottleSeconds ?? 300,
   };
 }
 
-export function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number): void {
+export function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number, warningThrottle?: number): void {
   const cfg = readConfig();
   if (warning !== undefined) cfg.warningThreshold = warning;
   if (autoswap !== undefined) cfg.autoswapThreshold = autoswap;
   if (strategy !== undefined) cfg.autoswapStrategy = strategy;
   if (cacheTTL !== undefined) cfg.usageCacheTTL = cacheTTL;
+  if (warningThrottle !== undefined) cfg.warningThrottleSeconds = warningThrottle;
   writeConfig(cfg);
   const final = getConfig();
   const swapStr = final.autoswapThreshold === null ? "disabled" : `${final.autoswapThreshold}% (${final.autoswapStrategy})`;
-  console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s`);
+  console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s, warning-throttle=${final.warningThrottleSeconds}s`);
+}
+
+/** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
+export function shouldWarnNow(): boolean {
+  const cfg = readConfig();
+  const lastTimestamp = cfg.lastWarningTimestamp ?? 0;
+  const throttle = getConfig().warningThrottleSeconds;
+  const now = Math.floor(Date.now() / 1000);
+
+  if (now - lastTimestamp >= throttle) {
+    cfg.lastWarningTimestamp = now;
+    writeConfig(cfg);
+    return true;
+  }
+  return false;
 }
 
 export interface OauthToken {

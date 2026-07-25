@@ -26,14 +26,19 @@ export interface Config {
     autoswapStrategy?: "next" | "prev" | "lowest";
     commandPrefix?: string;
     usageCacheTTL?: number;
+    warningThrottleSeconds?: number;
+    lastWarningTimestamp?: number;
 }
 export declare function getConfig(): {
     warningThreshold: number;
     autoswapThreshold: number | null;
     autoswapStrategy: "next" | "prev" | "lowest";
     usageCacheTTL: number;
+    warningThrottleSeconds: number;
 };
-export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number): void;
+export declare function setThresholds(warning?: number, autoswap?: number | null, strategy?: "next" | "prev" | "lowest", cacheTTL?: number, warningThrottle?: number): void;
+/** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
+export declare function shouldWarnNow(): boolean;
 export interface OauthToken {
     accessToken: string;
     [key: string]: unknown;

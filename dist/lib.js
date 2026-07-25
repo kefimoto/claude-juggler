@@ -62,9 +62,10 @@ export function getConfig() {
         autoswapThreshold: cfg.autoswapThreshold === undefined ? 99 : cfg.autoswapThreshold,
         autoswapStrategy: cfg.autoswapStrategy ?? "lowest",
         usageCacheTTL: cfg.usageCacheTTL ?? 30,
+        warningThrottleSeconds: cfg.warningThrottleSeconds ?? 300,
     };
 }
-export function setThresholds(warning, autoswap, strategy, cacheTTL) {
+export function setThresholds(warning, autoswap, strategy, cacheTTL, warningThrottle) {
     const cfg = readConfig();
     if (warning !== undefined)
         cfg.warningThreshold = warning;
@@ -74,10 +75,25 @@ export function setThresholds(warning, autoswap, strategy, cacheTTL) {
         cfg.autoswapStrategy = strategy;
     if (cacheTTL !== undefined)
         cfg.usageCacheTTL = cacheTTL;
+    if (warningThrottle !== undefined)
+        cfg.warningThrottleSeconds = warningThrottle;
     writeConfig(cfg);
     const final = getConfig();
     const swapStr = final.autoswapThreshold === null ? "disabled" : `${final.autoswapThreshold}% (${final.autoswapStrategy})`;
-    console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s`);
+    console.log(`Config updated: warning=${final.warningThreshold}%, autoswap=${swapStr}, cache-ttl=${final.usageCacheTTL}s, warning-throttle=${final.warningThrottleSeconds}s`);
+}
+/** Check if enough time has passed since the last warning. If yes, update timestamp and return true. */
+export function shouldWarnNow() {
+    const cfg = readConfig();
+    const lastTimestamp = cfg.lastWarningTimestamp ?? 0;
+    const throttle = getConfig().warningThrottleSeconds;
+    const now = Math.floor(Date.now() / 1000);
+    if (now - lastTimestamp >= throttle) {
+        cfg.lastWarningTimestamp = now;
+        writeConfig(cfg);
+        return true;
+    }
+    return false;
 }
 function readJSON(path) {
     return JSON.parse(readFileSync(path, "utf8"));

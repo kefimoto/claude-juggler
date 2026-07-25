@@ -26,6 +26,7 @@ import {
   checkUsage,
   getAccountsForCurrentDir,
   allAccountsAboveThreshold,
+  shouldWarnNow,
 } from "./lib";
 
 function fmtResetsIn(resetsAt: number | null): string {
@@ -97,13 +98,14 @@ Commands:
                              --no-cron: don't setup cron job
   uninstall                Remove Claude Code integration for current installation
   uninstall-all            Remove Claude Code integration for all installations
-  config [show|set-warning|set-autoswap|set-strategy|set-cache-ttl]
+  config [show|set-warning|set-autoswap|set-strategy|set-cache-ttl|set-warning-throttle]
                            View or edit config
                            show: display current config
                            set-warning <pct>: set warning threshold
                            set-autoswap <pct|off>: set autoswap or disable
                            set-strategy <next|prev|lowest>: set autoswap behavior
                            set-cache-ttl <seconds>: set usage cache TTL (default 30)
+                           set-warning-throttle <seconds>: min seconds between warnings (default 300)
   prime                    Check every account; ping any at 0% used
                            so its 5h window starts ticking (for cron)
   check-threshold [pct]    Exit 1 and print a warning if the active
@@ -304,6 +306,7 @@ function main(): void {
         console.log(`autoswapThreshold: ${cfg.autoswapThreshold === null ? "disabled" : cfg.autoswapThreshold + "%"}`);
         console.log(`autoswapStrategy: ${cfg.autoswapStrategy}`);
         console.log(`usageCacheTTL: ${cfg.usageCacheTTL}s`);
+        console.log(`warningThrottle: ${cfg.warningThrottleSeconds}s`);
       } else if (subCmd === "set-warning") {
         const val = Number(rest[1]);
         if (isNaN(val) || val < 0 || val > 100) {
@@ -332,8 +335,15 @@ function main(): void {
           process.exit(1);
         }
         setThresholds(undefined, undefined, undefined, val);
+      } else if (subCmd === "set-warning-throttle") {
+        const val = Number(rest[1]);
+        if (isNaN(val) || val < 0) {
+          console.error("Warning throttle must be >= 0 seconds (0 = no throttle)");
+          process.exit(1);
+        }
+        setThresholds(undefined, undefined, undefined, undefined, val);
       } else {
-        console.error("Unknown config subcommand. Use: show, set-warning, set-autoswap, set-strategy, set-cache-ttl");
+        console.error("Unknown config subcommand. Use: show, set-warning, set-autoswap, set-strategy, set-cache-ttl, set-warning-throttle");
         process.exit(1);
       }
       break;
@@ -382,18 +392,20 @@ function main(): void {
         if (autoswapThreshold !== null && pct >= autoswapThreshold) {
           // Check if all accounts are above the threshold
           if (allAccountsAboveThreshold(autoswapThreshold)) {
-            // All accounts are above threshold, don't swap, just warn
-            const context =
-              `⚠️  NOTIFY THE USER: All Accounts Above Autoswap Threshold\n` +
-              `Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
-              `(resets in ${fmtResetsIn(resetsAt)}), and all other accounts are also at or above ` +
-              `the ${autoswapThreshold}% autoswap threshold.\n` +
-              `Cannot autoswap—all accounts have hit the limit. User must wait for a usage window to reset.`;
-            console.log(
-              JSON.stringify({
-                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-              })
-            );
+            // All accounts are above threshold, don't swap, just warn (with throttling)
+            if (shouldWarnNow()) {
+              const context =
+                `⚠️  NOTIFY THE USER: All Accounts Above Autoswap Threshold\n` +
+                `Your active Claude account "${currentName}" (${label}) is at ${pct}% usage ` +
+                `(resets in ${fmtResetsIn(resetsAt)}), and all other accounts are also at or above ` +
+                `the ${autoswapThreshold}% autoswap threshold.\n` +
+                `Cannot autoswap—all accounts have hit the limit. User must wait for a usage window to reset.`;
+              console.log(
+                JSON.stringify({
+                  hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+                })
+              );
+            }
             process.exit(0);
             break;
           }
@@ -437,18 +449,20 @@ function main(): void {
             })
           );
         }
-        // Warn if at or above warning threshold
+        // Warn if at or above warning threshold (with throttling)
         else if (pct >= warningThreshold) {
-          const context =
-            `⚠️  NOTIFY THE USER: Usage Approaching Limit\n` +
-            `Your active Claude account "${currentName}" (${label}) is at ${pct}% of its ` +
-            `usage window (resets in ${fmtResetsIn(resetsAt)}), which is at or past the ${warningThreshold}% threshold.\n` +
-            `User should consider switching accounts (e.g. /swap or \`claude-juggler next\`).`;
-          console.log(
-            JSON.stringify({
-              hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
-            })
-          );
+          if (shouldWarnNow()) {
+            const context =
+              `⚠️  NOTIFY THE USER: Usage Approaching Limit\n` +
+              `Your active Claude account "${currentName}" (${label}) is at ${pct}% of its ` +
+              `usage window (resets in ${fmtResetsIn(resetsAt)}), which is at or past the ${warningThreshold}% threshold.\n` +
+              `User should consider switching accounts (e.g. /swap or \`claude-juggler next\`).`;
+            console.log(
+              JSON.stringify({
+                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context },
+              })
+            );
+          }
         }
       } catch {
         // no accounts configured yet, or transient check failure - stay silent
