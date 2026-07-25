@@ -400,10 +400,9 @@ export function install() {
             installMethod = "npx";
         }
     }
-    // Save installation method to config
+    // Save command prefix to config (will be set after we compute it)
     const cfg = readConfig();
-    cfg.installMethod = installMethod;
-    writeConfig(cfg);
+    // Will be updated below after we determine cmdPrefix
     // Determine hook script path: find the package root by walking up from this file
     let pkgRoot = __dirname;
     while (!existsSync(join(pkgRoot, "package.json"))) {
@@ -417,14 +416,30 @@ export function install() {
         throw new Error(`Hook script not found at ${hookScript}`);
     // Create commands directory if needed
     mkdirSync(commandsDir, { recursive: true });
-    // Generate command prefix based on installation method
+    // Generate command prefix - try to extract version spec from parent process
     let cmdPrefix = "claude-juggler";
-    if (installMethod === "bunx") {
-        cmdPrefix = "bunx claude-juggler@beta";
+    if (installMethod !== "global") {
+        const method = installMethod === "bunx" ? "bunx" : "npx";
+        let versionSpec = "";
+        // Try to find what version spec was used (e.g., @beta, @0.1.0) from parent process
+        try {
+            const fs = require("fs");
+            const ppid = process.ppid;
+            if (ppid) {
+                const cmdLine = fs.readFileSync(`/proc/${ppid}/cmdline`, "utf8").split("\0").join(" ");
+                const match = cmdLine.match(/claude-juggler(@[^\s]+)/);
+                if (match)
+                    versionSpec = match[1];
+            }
+        }
+        catch {
+            // Parent process not readable, no version spec found
+        }
+        cmdPrefix = versionSpec ? `${method} claude-juggler${versionSpec}` : `${method} claude-juggler`;
     }
-    else if (installMethod === "npx") {
-        cmdPrefix = "npx claude-juggler@beta";
-    }
+    // Save command prefix to config for future use
+    cfg.commandPrefix = cmdPrefix;
+    writeConfig(cfg);
     // Write swap command
     const swapCmd = `---
 description: Swap the active Claude account

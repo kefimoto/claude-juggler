@@ -24,7 +24,7 @@ export interface Config {
     warningThreshold?: number;
     autoswapThreshold?: number | null;
     autoswapStrategy?: "next" | "prev" | "lowest";
-    installMethod?: "global" | "bunx" | "npx";
+    commandPrefix?: string;
 }
 export declare function getConfig(): {
     warningThreshold: number;
