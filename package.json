@@ -5,8 +5,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "claude-juggler": "./bin/claude-juggler",
-    "juggler": "./bin/claude-juggler"
+    "claude-juggler": "bin/claude-juggler",
+    "juggler": "bin/claude-juggler"
   },
   "scripts": {
     "build": "tsc"
