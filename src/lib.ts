@@ -97,6 +97,7 @@ export interface AccountData {
   label: string;
   oauthAccount: Record<string, unknown>;
   claudeAiOauth: OauthToken;
+  priming?: boolean; // Whether to prime this account (default true)
 }
 
 interface StateFile {
@@ -213,18 +214,28 @@ export function currentAccount(): string | null {
 
 /** Capture the CURRENTLY LIVE credentials as a new named account. Run this
  * right after a real `claude auth login` for that account. */
-export function addAccount(name: string): AccountData {
+export function addAccount(name: string, priming?: boolean): AccountData {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     throw new Error("Account name must be alphanumeric (plus - and _).");
   }
   ensureConfigDir();
   const creds = readJSON<{ claudeAiOauth: OauthToken }>(getCredsPath());
   const live = readJSON<{ oauthAccount: Record<string, unknown> }>(getClaudeJsonPath());
+  // Ask about priming if not explicitly set
+  let shouldPrime = priming;
+  if (shouldPrime === undefined) {
+    shouldPrime = promptYesNo(
+      "\nEnable automatic account priming? (Periodically pings account to keep 5-hour usage window ticking) ",
+      true
+    );
+  }
+
   const data: AccountData = {
     name,
     label: String(live.oauthAccount.emailAddress ?? name),
     oauthAccount: live.oauthAccount,
     claudeAiOauth: creds.claudeAiOauth,
+    priming: shouldPrime,
   };
 
   const accounts = getAccountsForCurrentDir();
@@ -251,6 +262,14 @@ export function removeAccount(name: string): void {
     state.active = null;
     saveStateForCurrentDir(state);
   }
+}
+
+export function setPriming(name: string, enabled: boolean): boolean {
+  const accounts = getAccountsForCurrentDir();
+  if (!accounts[name]) throw new Error(`No account named ${name}.`);
+  accounts[name].priming = enabled;
+  saveAccountsForCurrentDir(accounts);
+  return enabled;
 }
 
 /**
@@ -435,10 +454,16 @@ function logLine(msg: string): void {
  * it shows 0% used. Never leaves the originally-active account swapped out. */
 export function prime(): void {
   withLock(() => {
-    const accounts = listAccounts();
+    const accountNames = listAccounts();
+    const accountsData = getAccountsForCurrentDir();
     const original = currentAccount();
     try {
-      for (const name of accounts) {
+      for (const name of accountNames) {
+        // Skip accounts that have priming disabled
+        if (accountsData[name]?.priming === false) {
+          logLine(`${name}: priming disabled, skipping`);
+          continue;
+        }
         activate(name, true);
         const { pct, resetsAt } = checkUsage();
         if (pct === null) {

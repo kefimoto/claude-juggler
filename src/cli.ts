@@ -22,6 +22,7 @@ import {
   setThresholds,
   setClaudeDir,
   isInstalled,
+  setPriming,
 } from "./lib";
 
 function fmtResetsIn(resetsAt: number | null): string {
@@ -56,9 +57,14 @@ Global Options:
                            Can be used with any command to target a different Claude install
 
 Commands:
-  add <name>               Save the CURRENTLY LOGGED IN account as <name>
+  add <name> [--priming|--no-priming]
+                           Save the CURRENTLY LOGGED IN account as <name>
                            (run this right after \`claude auth login\`)
+                           --priming: enable priming (default: ask if omitted)
+                           --no-priming: disable priming (default: ask if omitted)
   remove <name>            Forget a saved account (must not be active)
+  set-priming <name> <on|off>
+                           Enable/disable automatic priming for an account
   list                     List saved account names for current Claude install
   status                   Show all accounts' usage % and time-to-reset for current install
   use <name>               Switch to a specific account
@@ -115,8 +121,16 @@ function main(): void {
     case "add": {
       const name = rest[0];
       if (!name) return usage(), process.exit(1);
-      const data = withLock(() => addAccount(name));
-      console.log(`Saved current account as "${name}" (${data.label}).`);
+      let primingFlag: boolean | undefined;
+      if (rest.includes("--priming")) {
+        primingFlag = true;
+      } else if (rest.includes("--no-priming")) {
+        primingFlag = false;
+      }
+      // If neither flag specified, pass undefined to prompt interactively
+      const data = withLock(() => addAccount(name, primingFlag));
+      const primingStatus = data.priming ? "priming enabled" : "priming disabled";
+      console.log(`Saved current account as "${name}" (${data.label}) - ${primingStatus}.`);
       break;
     }
     case "remove": {
@@ -124,6 +138,19 @@ function main(): void {
       if (!name) return usage(), process.exit(1);
       withLock(() => removeAccount(name));
       console.log(`Removed "${name}".`);
+      break;
+    }
+    case "set-priming": {
+      const name = rest[0];
+      const state = rest[1];
+      if (!name || !state) return usage(), process.exit(1);
+      const enabled = state.toLowerCase() === "on";
+      if (state.toLowerCase() !== "on" && state.toLowerCase() !== "off") {
+        console.error("State must be 'on' or 'off'");
+        process.exit(1);
+      }
+      withLock(() => setPriming(name, enabled));
+      console.log(`Priming ${enabled ? "enabled" : "disabled"} for "${name}".`);
       break;
     }
     case "list": {

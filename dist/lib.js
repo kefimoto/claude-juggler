@@ -169,18 +169,24 @@ export function currentAccount() {
 }
 /** Capture the CURRENTLY LIVE credentials as a new named account. Run this
  * right after a real `claude auth login` for that account. */
-export function addAccount(name) {
+export function addAccount(name, priming) {
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
         throw new Error("Account name must be alphanumeric (plus - and _).");
     }
     ensureConfigDir();
     const creds = readJSON(getCredsPath());
     const live = readJSON(getClaudeJsonPath());
+    // Ask about priming if not explicitly set
+    let shouldPrime = priming;
+    if (shouldPrime === undefined) {
+        shouldPrime = promptYesNo("\nEnable automatic account priming? (Periodically pings account to keep 5-hour usage window ticking) ", true);
+    }
     const data = {
         name,
         label: String(live.oauthAccount.emailAddress ?? name),
         oauthAccount: live.oauthAccount,
         claudeAiOauth: creds.claudeAiOauth,
+        priming: shouldPrime,
     };
     const accounts = getAccountsForCurrentDir();
     accounts[name] = data;
@@ -204,6 +210,14 @@ export function removeAccount(name) {
         state.active = null;
         saveStateForCurrentDir(state);
     }
+}
+export function setPriming(name, enabled) {
+    const accounts = getAccountsForCurrentDir();
+    if (!accounts[name])
+        throw new Error(`No account named ${name}.`);
+    accounts[name].priming = enabled;
+    saveAccountsForCurrentDir(accounts);
+    return enabled;
 }
 /**
  * Safely make targetAccount the live account. No-ops if already active.
@@ -360,10 +374,16 @@ function logLine(msg) {
  * it shows 0% used. Never leaves the originally-active account swapped out. */
 export function prime() {
     withLock(() => {
-        const accounts = listAccounts();
+        const accountNames = listAccounts();
+        const accountsData = getAccountsForCurrentDir();
         const original = currentAccount();
         try {
-            for (const name of accounts) {
+            for (const name of accountNames) {
+                // Skip accounts that have priming disabled
+                if (accountsData[name]?.priming === false) {
+                    logLine(`${name}: priming disabled, skipping`);
+                    continue;
+                }
                 activate(name, true);
                 const { pct, resetsAt } = checkUsage();
                 if (pct === null) {

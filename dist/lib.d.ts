@@ -42,6 +42,7 @@ export interface AccountData {
     label: string;
     oauthAccount: Record<string, unknown>;
     claudeAiOauth: OauthToken;
+    priming?: boolean;
 }
 export declare function listAccounts(): string[];
 export declare function withLock<T>(fn: () => T): T;
@@ -50,8 +51,9 @@ export declare function groundTruthAccount(): string | null;
 export declare function currentAccount(): string | null;
 /** Capture the CURRENTLY LIVE credentials as a new named account. Run this
  * right after a real `claude auth login` for that account. */
-export declare function addAccount(name: string): AccountData;
+export declare function addAccount(name: string, priming?: boolean): AccountData;
 export declare function removeAccount(name: string): void;
+export declare function setPriming(name: string, enabled: boolean): boolean;
 /**
  * Safely make targetAccount the live account. No-ops if already active.
  * Throws if state's bookkeeping disagrees with the live token,
