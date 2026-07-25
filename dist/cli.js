@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, verifyStatus, withLock, getConfig, setThresholds, } from "./lib";
+import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, listAllInstalls, getAccountsForInstall, verifyStatus, withLock, getConfig, setThresholds, setClaudeDir, } from "./lib";
 function fmtResetsIn(resetsAt) {
     if (!resetsAt)
         return "unknown";
@@ -26,41 +26,55 @@ function usage() {
     console.error(`claude-juggler - switch between multiple Claude Code accounts
 
 Usage:
-  claude-juggler add <name>            Save the CURRENTLY LOGGED IN account as <name>
-                                        (run this right after \`claude auth login\`)
-  claude-juggler remove <name>         Forget a saved account (must not be active)
-  claude-juggler list                  List saved account names
-  claude-juggler status                Show all accounts' usage % and time-to-reset
-  claude-juggler use <name>            Switch to a specific account
-  claude-juggler next                  Switch to the next account in rotation
-  claude-juggler prev                  Switch to the previous account in rotation
-  claude-juggler lowest                Switch to the lowest-usage account
-  claude-juggler current               Print the currently active account name
-  claude-juggler install [OPTIONS]    Configure /swap and /accounts Claude Code
-                                        commands and usage-threshold hook
-                                        Options:
-                                          --install-cron: setup cron job
-                                          --no-cron: don't setup cron job
-                                          --claude-dir <path>: custom .claude dir
-  claude-juggler uninstall             Remove Claude Code integration and config
-  claude-juggler config [show|set-warning|set-autoswap|set-strategy]
-                                        View or edit warning/autoswap thresholds
-                                        show: display current config
-                                        set-warning <pct>: set warning threshold
-                                        set-autoswap <pct|off>: set autoswap or disable
-                                        set-strategy <next|prev|lowest>: set autoswap behavior
-  claude-juggler prime                 Check every account; ping any at 0% used
-                                        so its 5h window starts ticking (for cron)
-  claude-juggler check-threshold [pct]
-                                        Exit 1 and print a warning if the active
-                                        account's usage is >= pct (default 95)
-  claude-juggler hook-check [pct]      For use as a UserPromptSubmit hook: prints
-                                        additionalContext JSON when past threshold,
-                                        nothing otherwise. Never throws.
+  claude-juggler [--claude-dir <path>] <command> [options]
+
+Global Options:
+  --claude-dir <path>      Use a specific Claude installation directory (default: ~/.claude)
+                           Can be used with any command to target a different Claude install
+
+Commands:
+  add <name>               Save the CURRENTLY LOGGED IN account as <name>
+                           (run this right after \`claude auth login\`)
+  remove <name>            Forget a saved account (must not be active)
+  list                     List saved account names for current Claude install
+  status                   Show all accounts' usage % and time-to-reset for current install
+  use <name>               Switch to a specific account
+  next                     Switch to the next account in rotation
+  prev                     Switch to the previous account in rotation
+  lowest                   Switch to the lowest-usage account
+  current                  Print the currently active account name
+  list-all-installs        List all Claude installations with saved accounts
+  status-all-installs      Show status across all Claude installations
+  install [OPTIONS]        Configure /swap and /accounts Claude Code commands and hook
+                           Options:
+                             --install-cron: setup cron job
+                             --no-cron: don't setup cron job
+  uninstall                Remove Claude Code integration and config
+  config [show|set-warning|set-autoswap|set-strategy]
+                           View or edit warning/autoswap thresholds
+                           show: display current config
+                           set-warning <pct>: set warning threshold
+                           set-autoswap <pct|off>: set autoswap or disable
+                           set-strategy <next|prev|lowest>: set autoswap behavior
+  prime                    Check every account; ping any at 0% used
+                           so its 5h window starts ticking (for cron)
+  check-threshold [pct]    Exit 1 and print a warning if the active
+                           account's usage is >= pct (default 95)
+  hook-check [pct]         For use as a UserPromptSubmit hook: prints
+                           additionalContext JSON when past threshold,
+                           nothing otherwise. Never throws.
 `);
 }
 function main() {
-    const [cmd, ...rest] = process.argv.slice(2);
+    const args = process.argv.slice(2);
+    // Parse --claude-dir if provided and set it globally
+    const claudeDirIdx = args.findIndex(arg => arg === "--claude-dir");
+    if (claudeDirIdx !== -1 && claudeDirIdx + 1 < args.length) {
+        setClaudeDir(args[claudeDirIdx + 1]);
+        // Remove --claude-dir and its value from args
+        args.splice(claudeDirIdx, 2);
+    }
+    const [cmd, ...rest] = args;
     switch (cmd) {
         case "add": {
             const name = rest[0];
@@ -115,6 +129,39 @@ function main() {
         case "current": {
             const name = currentAccount();
             console.log(name ?? "(none)");
+            break;
+        }
+        case "list-all-installs": {
+            const installs = listAllInstalls();
+            if (installs.length === 0) {
+                console.log("No Claude installations with saved accounts found.");
+                break;
+            }
+            for (const install of installs) {
+                const activeMarker = install.active ? " (active: " + install.active + ")" : "";
+                console.log(`${install.claudeDir}: ${install.accountCount} account${install.accountCount === 1 ? "" : "s"}${activeMarker}`);
+            }
+            break;
+        }
+        case "status-all-installs": {
+            const installs = listAllInstalls();
+            if (installs.length === 0) {
+                console.log("No Claude installations with saved accounts found.");
+                break;
+            }
+            for (const install of installs) {
+                console.log(`\n${install.claudeDir}:`);
+                const accounts = getAccountsForInstall(install.claudeDir);
+                const active = install.active;
+                if (Object.keys(accounts).length === 0) {
+                    console.log("  (no accounts)");
+                    continue;
+                }
+                for (const [name, data] of Object.entries(accounts)) {
+                    const marker = name === active ? "*" : " ";
+                    console.log(`  ${marker} ${name.padEnd(16)} (${data.label})`);
+                }
+            }
             break;
         }
         case "prime":

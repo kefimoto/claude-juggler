@@ -15,19 +15,32 @@
  *     truth for identity, and never re-derive a saved account's identity
  *     from it — only the token needs refreshing between swaps.
  */
-import { readFileSync, writeFileSync, chmodSync, mkdirSync, rmdirSync, readdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, chmodSync, mkdirSync, rmdirSync, existsSync } from "fs";
 import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
 export const CONFIG_DIR = process.env.CLAUDE_JUGGLER_DIR || join(homedir(), ".claude-juggler");
-export const ACCOUNTS_DIR = join(CONFIG_DIR, "accounts");
-export const STATE_PATH = join(CONFIG_DIR, "state.json");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const LOG_PATH = join(CONFIG_DIR, "prime.log");
 const LOCK_DIR = join(CONFIG_DIR, ".lock.d");
-const CREDS_PATH = join(homedir(), ".claude/.credentials.json");
-const CLAUDE_JSON_PATH = join(homedir(), ".claude.json");
+// Global Claude directory - set via setClaudeDir() before using any account functions
+let globalClaudeDir = join(homedir(), ".claude");
+export function setClaudeDir(dir) {
+    globalClaudeDir = dir.replace(/^~/, homedir());
+}
+// Unified accounts file: { "/path/to/claude": { "name": account_data, ... }, ... }
+export const ACCOUNTS_FILE = join(CONFIG_DIR, "accounts.json");
+// Unified state file: { "/path/to/claude": { "active": "name" }, ... }
+export const STATE_FILE = join(CONFIG_DIR, "state.json");
+// Get credentials path for current Claude install
+function getCredsPath() {
+    return join(globalClaudeDir, ".credentials.json");
+}
+// Get claude.json path for current Claude install
+function getClaudeJsonPath() {
+    return join(globalClaudeDir, "claude.json");
+}
 function readConfig() {
     if (!existsSync(CONFIG_PATH))
         return { warningThreshold: 95, autoswapThreshold: 99, autoswapStrategy: "lowest" };
@@ -70,23 +83,37 @@ function fp(oauth) {
     return createHash("sha256").update(oauth.accessToken).digest("hex").slice(0, 12);
 }
 function ensureConfigDir() {
-    mkdirSync(ACCOUNTS_DIR, { recursive: true });
-    if (!existsSync(STATE_PATH))
-        writeJSON(STATE_PATH, { active: null });
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    if (!existsSync(ACCOUNTS_FILE))
+        writeJSON(ACCOUNTS_FILE, {});
+    if (!existsSync(STATE_FILE))
+        writeJSON(STATE_FILE, {});
 }
-function accountPath(name) {
-    return join(ACCOUNTS_DIR, `${name}.json`);
+function getAccountsForCurrentDir() {
+    ensureConfigDir();
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    return allAccounts[globalClaudeDir] || {};
+}
+function getStateForCurrentDir() {
+    ensureConfigDir();
+    const allState = readJSON(STATE_FILE);
+    return allState[globalClaudeDir] || { active: null };
+}
+function saveAccountsForCurrentDir(accounts) {
+    ensureConfigDir();
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    allAccounts[globalClaudeDir] = accounts;
+    writeJSON(ACCOUNTS_FILE, allAccounts);
+}
+function saveStateForCurrentDir(state) {
+    ensureConfigDir();
+    const allState = readJSON(STATE_FILE);
+    allState[globalClaudeDir] = state;
+    writeJSON(STATE_FILE, allState);
 }
 export function listAccounts() {
-    ensureConfigDir();
-    return readdirSync(ACCOUNTS_DIR)
-        .filter((f) => f.endsWith(".json"))
-        .map((f) => f.slice(0, -5))
-        .sort();
-}
-function readState() {
-    ensureConfigDir();
-    return readJSON(STATE_PATH);
+    const accounts = getAccountsForCurrentDir();
+    return Object.keys(accounts).sort();
 }
 // Exclusive lock via atomic mkdir (portable, no native flock binding needed).
 function sleep(ms) {
@@ -127,18 +154,18 @@ export function withLock(fn) {
 }
 /** Which saved account does the LIVE token actually match? null if none. */
 export function groundTruthAccount() {
-    if (!existsSync(CREDS_PATH))
+    if (!existsSync(getCredsPath()))
         return null;
-    const liveFp = fp(readJSON(CREDS_PATH).claudeAiOauth);
-    for (const name of listAccounts()) {
-        const data = readJSON(accountPath(name));
-        if (fp(data.claudeAiOauth) === liveFp)
+    const liveFp = fp(readJSON(getCredsPath()).claudeAiOauth);
+    const accounts = getAccountsForCurrentDir();
+    for (const name of Object.keys(accounts)) {
+        if (fp(accounts[name].claudeAiOauth) === liveFp)
             return name;
     }
     return null;
 }
 export function currentAccount() {
-    return readState().active;
+    return getStateForCurrentDir().active;
 }
 /** Capture the CURRENTLY LIVE credentials as a new named account. Run this
  * right after a real `claude auth login` for that account. */
@@ -147,47 +174,53 @@ export function addAccount(name) {
         throw new Error("Account name must be alphanumeric (plus - and _).");
     }
     ensureConfigDir();
-    const creds = readJSON(CREDS_PATH);
-    const live = readJSON(CLAUDE_JSON_PATH);
+    const creds = readJSON(getCredsPath());
+    const live = readJSON(getClaudeJsonPath());
     const data = {
         name,
         label: String(live.oauthAccount.emailAddress ?? name),
         oauthAccount: live.oauthAccount,
         claudeAiOauth: creds.claudeAiOauth,
     };
-    writeJSON(accountPath(name), data, 0o600);
-    const state = readState();
+    const accounts = getAccountsForCurrentDir();
+    accounts[name] = data;
+    saveAccountsForCurrentDir(accounts);
+    const state = getStateForCurrentDir();
     if (state.active === null) {
         state.active = name;
-        writeJSON(STATE_PATH, state);
+        saveStateForCurrentDir(state);
     }
     return data;
 }
 export function removeAccount(name) {
-    const path = accountPath(name);
-    if (!existsSync(path))
+    const accounts = getAccountsForCurrentDir();
+    if (!accounts[name])
         throw new Error(`No account named ${name}.`);
-    const state = readState();
+    delete accounts[name];
+    saveAccountsForCurrentDir(accounts);
+    // If this was the active account, clear the active pointer
+    const state = getStateForCurrentDir();
     if (state.active === name) {
-        throw new Error(`Can't remove ${name}: it's the active account. Switch away first.`);
+        state.active = null;
+        saveStateForCurrentDir(state);
     }
-    require("fs").unlinkSync(path);
 }
 /**
  * Safely make targetAccount the live account. No-ops if already active.
- * Throws if state.json's bookkeeping disagrees with the live token,
+ * Throws if state's bookkeeping disagrees with the live token,
  * rather than silently overwriting an account's saved data.
  */
 export function activate(targetName, quiet = false) {
-    if (!existsSync(accountPath(targetName))) {
+    const accounts = getAccountsForCurrentDir();
+    if (!accounts[targetName]) {
         throw new Error(`No account named ${targetName}. Known accounts: ${listAccounts().join(", ") || "(none)"}`);
     }
-    const state = readState();
+    const state = getStateForCurrentDir();
     const claimedName = state.active;
     if (claimedName !== null) {
         const realName = groundTruthAccount();
         if (realName !== claimedName) {
-            throw new Error(`ABORT: state.json claims ${claimedName} is live, but the live token ` +
+            throw new Error(`ABORT: state claims ${claimedName} is live, but the live token ` +
                 `actually matches ${realName ?? "an UNKNOWN account"}. Not touching any account file.`);
         }
     }
@@ -196,27 +229,25 @@ export function activate(targetName, quiet = false) {
             console.log(`Already on ${targetName}.`);
         return targetName;
     }
-    const creds = readJSON(CREDS_PATH);
-    const live = readJSON(CLAUDE_JSON_PATH);
+    const creds = readJSON(getCredsPath());
+    const live = readJSON(getClaudeJsonPath());
     // 1. Re-capture the CURRENT account's live TOKEN before leaving it (tokens
     // rotate). Identity is deliberately NOT re-derived here - see file header.
     if (claimedName !== null) {
-        const currentPath = accountPath(claimedName);
-        const current = readJSON(currentPath);
-        current.claudeAiOauth = creds.claudeAiOauth;
-        writeJSON(currentPath, current, 0o600);
+        accounts[claimedName].claudeAiOauth = creds.claudeAiOauth;
+        saveAccountsForCurrentDir(accounts);
     }
     // 2. Load target account into the live files (read-modify-write single keys only).
-    const target = readJSON(accountPath(targetName));
+    const target = accounts[targetName];
     creds.claudeAiOauth = target.claudeAiOauth;
-    writeJSON(CREDS_PATH, creds, 0o600);
+    writeJSON(getCredsPath(), creds, 0o600);
     live.oauthAccount = target.oauthAccount;
-    writeJSON(CLAUDE_JSON_PATH, live);
+    writeJSON(getClaudeJsonPath(), live);
     // 3. Update the active pointer.
     state.active = targetName;
-    writeJSON(STATE_PATH, state);
+    saveStateForCurrentDir(state);
     if (!quiet) {
-        const fromLabel = claimedName ? readJSON(accountPath(claimedName)).label : "(none)";
+        const fromLabel = claimedName ? accounts[claimedName].label : "(none)";
         console.log(`Swapped ${claimedName ?? "(none)"} (${fromLabel}) -> ${targetName} (${target.label})`);
     }
     return targetName;
@@ -359,14 +390,15 @@ export function prime() {
  * currently-active one for longer than the check itself takes. */
 export function statusAll() {
     return withLock(() => {
-        const accounts = listAccounts();
+        const accountNames = listAccounts();
+        const accountsData = getAccountsForCurrentDir();
         const original = currentAccount();
         const results = [];
         try {
-            for (const name of accounts) {
+            for (const name of accountNames) {
                 activate(name, true);
                 const { pct, resetsAt } = checkUsage();
-                const label = readJSON(accountPath(name)).label;
+                const label = accountsData[name]?.label || name;
                 results.push({ name, label, active: name === original, pct, resetsAt });
             }
         }
@@ -377,18 +409,65 @@ export function statusAll() {
         return results;
     });
 }
+/** Get all Claude installations that have saved accounts. */
+export function getAllInstalls() {
+    ensureConfigDir();
+    if (!existsSync(ACCOUNTS_FILE))
+        return [];
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    return Object.keys(allAccounts).sort();
+}
+/** Get account names for a specific Claude installation without changing active dir. */
+export function listAccountsForInstall(claudeDir) {
+    ensureConfigDir();
+    if (!existsSync(ACCOUNTS_FILE))
+        return [];
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    return Object.keys(allAccounts[claudeDir] || {}).sort();
+}
+/** Get the active account for a specific Claude installation. */
+export function getCurrentAccountForInstall(claudeDir) {
+    ensureConfigDir();
+    if (!existsSync(STATE_FILE))
+        return null;
+    const allState = readJSON(STATE_FILE);
+    return allState[claudeDir]?.active || null;
+}
+/** Get all accounts for a specific Claude installation without changing active dir. */
+export function getAccountsForInstall(claudeDir) {
+    ensureConfigDir();
+    if (!existsSync(ACCOUNTS_FILE))
+        return {};
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    return allAccounts[claudeDir] || {};
+}
+/** List all Claude installations with their account counts. */
+export function listAllInstalls() {
+    ensureConfigDir();
+    if (!existsSync(ACCOUNTS_FILE) || !existsSync(STATE_FILE))
+        return [];
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    const allState = readJSON(STATE_FILE);
+    return Object.keys(allAccounts)
+        .sort()
+        .map(claudeDir => ({
+        claudeDir,
+        accountCount: Object.keys(allAccounts[claudeDir] || {}).length,
+        active: allState[claudeDir]?.active || null,
+    }));
+}
 /** Setup Claude Code integration: create commands and configure hook. */
 export function install(options = {}) {
     // Support old boolean signature for backwards compatibility
     const opts = typeof options === "boolean" ? { installCron: options } : options;
     const defaultClaudeDir = join(homedir(), ".claude");
-    // Prompt for Claude directory if not in non-interactive mode
-    let claudeDir = opts.claudeDir || defaultClaudeDir;
-    if (!opts.claudeDir && !opts.noCron && !opts.installCron) {
+    // Use global claudeDir if set via CLI, otherwise use opts or prompt
+    let claudeDir = globalClaudeDir !== defaultClaudeDir ? globalClaudeDir : (opts.claudeDir || defaultClaudeDir);
+    if (!opts.claudeDir && claudeDir === defaultClaudeDir && !opts.noCron && !opts.installCron) {
         // Interactive mode: ask for Claude directory
         const customDir = prompt(`Where is your Claude Code directory? [${defaultClaudeDir}] `);
         if (customDir)
-            claudeDir = customDir;
+            claudeDir = customDir.replace(/^~/, homedir());
     }
     // Verify Claude directory exists
     if (!existsSync(claudeDir)) {
@@ -522,14 +601,17 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
         timeout: 10,
     });
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-    console.log("✓ Created ~/.claude/commands/swap.md");
-    console.log("✓ Created ~/.claude/commands/accounts.md");
-    console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookCommand}`);
+    const displayDir = claudeDir === defaultClaudeDir ? "~/.claude" : claudeDir;
+    console.log(`✓ Created ${displayDir}/commands/swap.md`);
+    console.log(`✓ Created ${displayDir}/commands/accounts.md`);
+    console.log(`✓ Updated ${displayDir}/settings.json with hook: ${hookCommand}`);
     // Setup cron job
     if (opts.installCron && opts.claudeDir) {
         // Both flags set: fully non-interactive, auto-install cron
-        const cronCommand = `${cmdPrefix} prime`;
-        setupCron(cronCommand);
+        const cronCommand = claudeDir === defaultClaudeDir
+            ? `${cmdPrefix} prime`
+            : `${cmdPrefix} --claude-dir "${claudeDir}" prime`;
+        setupCronForInstall(cronCommand, claudeDir);
         console.log(`✓ Added cron job: */20 * * * * ${cronCommand}`);
     }
     else if (opts.noCron) {
@@ -537,9 +619,11 @@ user to run \`${cmdPrefix} add <name>\` after logging in.
     }
     else if (opts.installCron || promptYesNo("\nEnable automatic account priming with cron (every 20 minutes)? [y/N] ", false)) {
         // Either --install-cron was set, or user said yes
-        const cronCommand = `${cmdPrefix} prime`;
+        const cronCommand = claudeDir === defaultClaudeDir
+            ? `${cmdPrefix} prime`
+            : `${cmdPrefix} --claude-dir "${claudeDir}" prime`;
         try {
-            setupCron(cronCommand);
+            setupCronForInstall(cronCommand, claudeDir);
             console.log(`✓ Added cron job: */20 * * * * ${cronCommand}`);
         }
         catch (e) {
@@ -568,7 +652,7 @@ function promptYesNo(question, defaultYes = false) {
         return defaultYes;
     return answer.toLowerCase() === "y" || answer.toLowerCase() === "yes";
 }
-function setupCron(command) {
+function setupCronForInstall(command, claudeDir) {
     try {
         // Get current crontab
         let crontab = "";
@@ -579,9 +663,16 @@ function setupCron(command) {
             // No existing crontab
             crontab = "";
         }
-        // Check if already exists (by checking if this command is already in crontab)
-        if (crontab.includes("claude-juggler prime") || crontab.includes("bunx claude-juggler") || crontab.includes("npx claude-juggler")) {
-            return; // Already configured
+        // Check if already exists for this specific installation
+        // For default ~/.claude, check for "prime" without --claude-dir
+        // For custom, check for the specific command with --claude-dir
+        const defaultClaudeDir = join(homedir(), ".claude");
+        const isDefault = claudeDir === defaultClaudeDir;
+        const searchPattern = isDefault
+            ? /claude-juggler prime|bunx claude-juggler.*prime|npx claude-juggler.*prime/
+            : new RegExp(`claude-dir.*"${claudeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}".*prime|${command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+        if (searchPattern.test(crontab)) {
+            return; // Already configured for this installation
         }
         // Add new cron entry
         const newEntry = `*/20 * * * * ${command}\n`;
@@ -593,57 +684,90 @@ function setupCron(command) {
         throw new Error(`Failed to setup cron: ${e.message}`);
     }
 }
-/** Remove Claude Code integration and config. */
-export function uninstall() {
-    const claudeDir = join(homedir(), ".claude");
-    const commandsDir = join(claudeDir, "commands");
-    const settingsPath = join(claudeDir, "settings.json");
-    const swapCmdPath = join(commandsDir, "swap.md");
-    const accountsCmdPath = join(commandsDir, "accounts.md");
-    // Remove command files
-    if (existsSync(swapCmdPath)) {
-        require("fs").unlinkSync(swapCmdPath);
-        console.log("✓ Removed ~/.claude/commands/swap.md");
-    }
-    if (existsSync(accountsCmdPath)) {
-        require("fs").unlinkSync(accountsCmdPath);
-        console.log("✓ Removed ~/.claude/commands/accounts.md");
-    }
-    // Remove hook from settings.json
-    if (existsSync(settingsPath)) {
-        let settings = readJSON(settingsPath);
-        if (settings.hooks?.UserPromptSubmit?.[0]?.hooks) {
-            settings.hooks.UserPromptSubmit[0].hooks = settings.hooks.UserPromptSubmit[0].hooks.filter((h) => !h.command || !h.command.includes("check-usage-hook"));
-            writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-            console.log("✓ Removed hook from ~/.claude/settings.json");
-        }
-    }
-    // Remove config directory
-    if (existsSync(CONFIG_DIR)) {
-        require("fs").rmSync(CONFIG_DIR, { recursive: true });
-        console.log(`✓ Removed ${CONFIG_DIR}`);
-    }
-    // Remove cron job
+function removeCronForInstall(claudeDir) {
     try {
+        // Get current crontab
         let crontab = "";
         try {
             crontab = execFileSync("crontab", ["-l"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
         }
         catch {
             // No crontab to remove
-            crontab = "";
+            return;
         }
-        if (crontab.includes("prime-cron.sh")) {
-            const newCrontab = crontab
+        // For default ~/.claude, remove entries without --claude-dir
+        // For custom, remove entries with the specific --claude-dir value
+        const defaultClaudeDir = join(homedir(), ".claude");
+        const isDefault = claudeDir === defaultClaudeDir;
+        let newCrontab;
+        if (isDefault) {
+            // Remove default installation cron (the one without --claude-dir)
+            newCrontab = crontab
                 .split("\n")
-                .filter((line) => !line.includes("prime-cron.sh") && line.trim())
-                .join("\n") + (crontab.endsWith("\n") ? "\n" : "");
+                .filter(line => {
+                // Remove if it has "claude-juggler prime" but NOT "--claude-dir"
+                return !(line.includes("claude-juggler") && line.includes("prime") && !line.includes("--claude-dir"));
+            })
+                .join("\n");
+        }
+        else {
+            // Remove custom installation cron (the one with this specific --claude-dir)
+            newCrontab = crontab
+                .split("\n")
+                .filter(line => !line.includes(`--claude-dir`) || !line.includes(`"${claudeDir}"`) || !line.includes("prime"))
+                .join("\n");
+        }
+        // Only update if something was removed
+        if (newCrontab.trim() !== crontab.trim()) {
             execFileSync("crontab", ["-"], { encoding: "utf8", input: newCrontab, stdio: ["pipe", "pipe", "pipe"] });
             console.log("✓ Removed cron job");
         }
     }
     catch {
         // Cron removal failed, but continue
+    }
+}
+/** Remove Claude Code integration and config for the current installation. */
+export function uninstall() {
+    // Use global claudeDir if set, otherwise default
+    const defaultClaudeDir = join(homedir(), ".claude");
+    const claudeDir = globalClaudeDir !== defaultClaudeDir ? globalClaudeDir : defaultClaudeDir;
+    const commandsDir = join(claudeDir, "commands");
+    const settingsPath = join(claudeDir, "settings.json");
+    const swapCmdPath = join(commandsDir, "swap.md");
+    const accountsCmdPath = join(commandsDir, "accounts.md");
+    const displayDir = claudeDir === defaultClaudeDir ? "~/.claude" : claudeDir;
+    // Remove command files
+    if (existsSync(swapCmdPath)) {
+        require("fs").unlinkSync(swapCmdPath);
+        console.log(`✓ Removed ${displayDir}/commands/swap.md`);
+    }
+    if (existsSync(accountsCmdPath)) {
+        require("fs").unlinkSync(accountsCmdPath);
+        console.log(`✓ Removed ${displayDir}/commands/accounts.md`);
+    }
+    // Remove hook from settings.json
+    if (existsSync(settingsPath)) {
+        let settings = readJSON(settingsPath);
+        if (settings.hooks?.UserPromptSubmit?.[0]?.hooks) {
+            settings.hooks.UserPromptSubmit[0].hooks = settings.hooks.UserPromptSubmit[0].hooks.filter((h) => !h.command || !h.command.includes("hook-check"));
+            writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+            console.log(`✓ Removed hook from ${displayDir}/settings.json`);
+        }
+    }
+    // Remove cron job for this specific installation
+    removeCronForInstall(claudeDir);
+    // Remove account storage for this installation ONLY (not the global config)
+    const allAccounts = readJSON(ACCOUNTS_FILE);
+    if (allAccounts[claudeDir]) {
+        delete allAccounts[claudeDir];
+        writeJSON(ACCOUNTS_FILE, allAccounts);
+        console.log(`✓ Removed account storage for this installation`);
+    }
+    const allState = readJSON(STATE_FILE);
+    if (allState[claudeDir]) {
+        delete allState[claudeDir];
+        writeJSON(STATE_FILE, allState);
     }
     console.log("\nUninstall complete!");
 }

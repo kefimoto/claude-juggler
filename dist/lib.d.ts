@@ -16,10 +16,11 @@
  *     from it — only the token needs refreshing between swaps.
  */
 export declare const CONFIG_DIR: string;
-export declare const ACCOUNTS_DIR: string;
-export declare const STATE_PATH: string;
 export declare const CONFIG_PATH: string;
 export declare const LOG_PATH: string;
+export declare function setClaudeDir(dir: string): void;
+export declare const ACCOUNTS_FILE: string;
+export declare const STATE_FILE: string;
 export interface Config {
     warningThreshold?: number;
     autoswapThreshold?: number | null;
@@ -53,7 +54,7 @@ export declare function addAccount(name: string): AccountData;
 export declare function removeAccount(name: string): void;
 /**
  * Safely make targetAccount the live account. No-ops if already active.
- * Throws if state.json's bookkeeping disagrees with the live token,
+ * Throws if state's bookkeeping disagrees with the live token,
  * rather than silently overwriting an account's saved data.
  */
 export declare function activate(targetName: string, quiet?: boolean): string;
@@ -82,6 +83,22 @@ export declare function statusAll(): Array<{
     pct: number | null;
     resetsAt: number | null;
 }>;
+/** Get all Claude installations that have saved accounts. */
+export declare function getAllInstalls(): string[];
+/** Get account names for a specific Claude installation without changing active dir. */
+export declare function listAccountsForInstall(claudeDir: string): string[];
+/** Get the active account for a specific Claude installation. */
+export declare function getCurrentAccountForInstall(claudeDir: string): string | null;
+/** Get all accounts for a specific Claude installation without changing active dir. */
+export declare function getAccountsForInstall(claudeDir: string): {
+    [name: string]: AccountData;
+};
+/** List all Claude installations with their account counts. */
+export declare function listAllInstalls(): Array<{
+    claudeDir: string;
+    accountCount: number;
+    active: string | null;
+}>;
 interface InstallOptions {
     installCron?: boolean;
     noCron?: boolean;
@@ -89,6 +106,6 @@ interface InstallOptions {
 }
 /** Setup Claude Code integration: create commands and configure hook. */
 export declare function install(options?: InstallOptions | boolean): void;
-/** Remove Claude Code integration and config. */
+/** Remove Claude Code integration and config for the current installation. */
 export declare function uninstall(): void;
 export {};
