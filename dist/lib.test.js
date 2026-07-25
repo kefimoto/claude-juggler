@@ -23,12 +23,12 @@ function createMockClaude(dir, email, token) {
 }
 // Helper to run CLI command
 function runCLI(args, env = {}) {
-    const envStr = Object.entries({ ...process.env, ...env })
+    const envStr = Object.entries({ ...process.env, CLAUDE_JUGGLER_TEST: "1", ...env })
         .map(([k, v]) => `${k}="${v}"`)
         .join(" ");
     try {
         const cmd = `${envStr} bun /home/jake/repos/claude-juggler/src/cli.ts ${args.join(" ")}`;
-        return execSync(cmd, { cwd: TEST_DIR, encoding: "utf8" });
+        return execSync(cmd, { cwd: TEST_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
     }
     catch (e) {
         return e.stdout || e.stderr || e.message;
