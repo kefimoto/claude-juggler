@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, setup, statusAll, verifyStatus, withLock, getConfig, setThresholds, } from "./lib";
+import { addAccount, removeAccount, listAccounts, currentAccount, activate, nextAccount, prevAccount, lowestUsageAccount, prime, install, uninstall, statusAll, verifyStatus, withLock, getConfig, setThresholds, } from "./lib";
 function fmtResetsIn(resetsAt) {
     if (!resetsAt)
         return "unknown";
@@ -36,8 +36,9 @@ Usage:
   claude-juggler prev                  Switch to the previous account in rotation
   claude-juggler lowest                Switch to the lowest-usage account
   claude-juggler current               Print the currently active account name
-  claude-juggler setup                 Configure /swap and /accounts Claude Code
+  claude-juggler install               Configure /swap and /accounts Claude Code
                                         commands and usage-threshold hook
+  claude-juggler uninstall             Remove Claude Code integration and config
   claude-juggler config [show|set-warning|set-autoswap|set-strategy]
                                         View or edit warning/autoswap thresholds
                                         show: display current config
@@ -115,8 +116,11 @@ function main() {
         case "prime":
             prime();
             break;
-        case "setup":
-            setup();
+        case "install":
+            install();
+            break;
+        case "uninstall":
+            uninstall();
             break;
         case "config": {
             const subCmd = rest[0];

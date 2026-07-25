@@ -82,4 +82,6 @@ export declare function statusAll(): Array<{
     resetsAt: number | null;
 }>;
 /** Setup Claude Code integration: create commands and configure hook. */
-export declare function setup(): void;
+export declare function install(): void;
+/** Remove Claude Code integration and config. */
+export declare function uninstall(): void;

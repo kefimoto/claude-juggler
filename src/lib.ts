@@ -431,7 +431,7 @@ export function statusAll(): Array<{ name: string; label: string; active: boolea
 }
 
 /** Setup Claude Code integration: create commands and configure hook. */
-export function setup(): void {
+export function install(): void {
   const claudeDir = join(homedir(), ".claude");
   const commandsDir = join(claudeDir, "commands");
   const settingsPath = join(claudeDir, "settings.json");
@@ -521,4 +521,43 @@ user to run \`claude-juggler add <name>\` after logging in.
   console.log("✓ Created ~/.claude/commands/accounts.md");
   console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookScript}`);
   console.log("\nSetup complete! Use /swap and /accounts in Claude Code, or run: claude-juggler [add|list|use|status]");
+}
+
+/** Remove Claude Code integration and config. */
+export function uninstall(): void {
+  const claudeDir = join(homedir(), ".claude");
+  const commandsDir = join(claudeDir, "commands");
+  const settingsPath = join(claudeDir, "settings.json");
+  const swapCmdPath = join(commandsDir, "swap.md");
+  const accountsCmdPath = join(commandsDir, "accounts.md");
+
+  // Remove command files
+  if (existsSync(swapCmdPath)) {
+    require("fs").unlinkSync(swapCmdPath);
+    console.log("✓ Removed ~/.claude/commands/swap.md");
+  }
+  if (existsSync(accountsCmdPath)) {
+    require("fs").unlinkSync(accountsCmdPath);
+    console.log("✓ Removed ~/.claude/commands/accounts.md");
+  }
+
+  // Remove hook from settings.json
+  if (existsSync(settingsPath)) {
+    let settings = readJSON<any>(settingsPath);
+    if (settings.hooks?.UserPromptSubmit?.[0]?.hooks) {
+      settings.hooks.UserPromptSubmit[0].hooks = settings.hooks.UserPromptSubmit[0].hooks.filter(
+        (h: any) => !h.command || !h.command.includes("check-usage-hook")
+      );
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+      console.log("✓ Removed hook from ~/.claude/settings.json");
+    }
+  }
+
+  // Remove config directory
+  if (existsSync(CONFIG_DIR)) {
+    require("fs").rmSync(CONFIG_DIR, { recursive: true });
+    console.log(`✓ Removed ${CONFIG_DIR}`);
+  }
+
+  console.log("\nUninstall complete!");
 }
