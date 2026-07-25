@@ -1,12 +1,12 @@
 {
-  "name": "polyclaude",
-  "version": "1.0.0",
+  "name": "claude-juggler",
+  "version": "0.1.0-beta.1",
   "description": "Switch between multiple Claude Code accounts instantly, in-session, no browser required. CLI + Claude Code commands + optional auto-stop-at-threshold hook.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "polyclaude": "./dist/cli.js",
-    "pc": "./dist/cli.js"
+    "claude-juggler": "./dist/cli.js",
+    "juggler": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
