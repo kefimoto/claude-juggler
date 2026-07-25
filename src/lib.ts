@@ -408,6 +408,41 @@ export function checkUsageForAccount(account: AccountData): UsageResult {
       text
     );
     if (!m) return { pct: null, resetsAt: null };
+
+    // Check if Claude refreshed the token in the temp dir and sync it back
+    try {
+      const refreshedCreds = readJSON<{ claudeAiOauth: OauthToken }>(join(tempDir, ".credentials.json"));
+      const newToken = refreshedCreds.claudeAiOauth?.accessToken;
+      if (newToken && newToken !== account.claudeAiOauth.accessToken) {
+        // Token was refreshed, update our stored account and the live config if active
+        const oldFp = fp(account.claudeAiOauth);
+        const accounts = getAccountsForCurrentDir();
+        let accountName: string | null = null;
+
+        // Find which account this is and update it
+        for (const name of Object.keys(accounts)) {
+          if (fp(accounts[name].claudeAiOauth) === oldFp) {
+            accounts[name].claudeAiOauth = refreshedCreds.claudeAiOauth;
+            accountName = name;
+            break;
+          }
+        }
+
+        if (accountName) {
+          saveAccountsForCurrentDir(accounts);
+          // Also update the live config if this is the current account
+          const current = groundTruthAccount();
+          if (current === accountName) {
+            const creds = readJSON<{ claudeAiOauth: OauthToken }>(getCredsPath());
+            creds.claudeAiOauth = refreshedCreds.claudeAiOauth;
+            writeJSON(getCredsPath(), creds, 0o600);
+          }
+        }
+      }
+    } catch {
+      // Failed to sync refreshed token, continue anyway
+    }
+
     const pct = Number(m[1]);
     const resetsAt = m[2] ? zonedTimeToEpoch(m[2], m[3], m[4]) : null;
     return { pct, resetsAt };

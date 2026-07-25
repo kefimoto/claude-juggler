@@ -341,6 +341,38 @@ export function checkUsageForAccount(account) {
         const m = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([A-Za-z]{3} \d{1,2}),\s*(\d{1,2}:\d{2}[ap]m)\s*\(([^)]+)\))?/.exec(text);
         if (!m)
             return { pct: null, resetsAt: null };
+        // Check if Claude refreshed the token in the temp dir and sync it back
+        try {
+            const refreshedCreds = readJSON(join(tempDir, ".credentials.json"));
+            const newToken = refreshedCreds.claudeAiOauth?.accessToken;
+            if (newToken && newToken !== account.claudeAiOauth.accessToken) {
+                // Token was refreshed, update our stored account and the live config if active
+                const oldFp = fp(account.claudeAiOauth);
+                const accounts = getAccountsForCurrentDir();
+                let accountName = null;
+                // Find which account this is and update it
+                for (const name of Object.keys(accounts)) {
+                    if (fp(accounts[name].claudeAiOauth) === oldFp) {
+                        accounts[name].claudeAiOauth = refreshedCreds.claudeAiOauth;
+                        accountName = name;
+                        break;
+                    }
+                }
+                if (accountName) {
+                    saveAccountsForCurrentDir(accounts);
+                    // Also update the live config if this is the current account
+                    const current = groundTruthAccount();
+                    if (current === accountName) {
+                        const creds = readJSON(getCredsPath());
+                        creds.claudeAiOauth = refreshedCreds.claudeAiOauth;
+                        writeJSON(getCredsPath(), creds, 0o600);
+                    }
+                }
+            }
+        }
+        catch {
+            // Failed to sync refreshed token, continue anyway
+        }
         const pct = Number(m[1]);
         const resetsAt = m[2] ? zonedTimeToEpoch(m[2], m[3], m[4]) : null;
         return { pct, resetsAt };
