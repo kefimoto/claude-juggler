@@ -1,11 +1,12 @@
 {
   "name": "claude-juggler",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "devDependencies": {
     "@types/bun": "^1.3.14",
     "@types/node": "^26.1.1",
     "husky": "^9.1.7",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.10"
   },
   "bin": {
     "claude-juggler": "bin/claude-juggler",
@@ -29,7 +30,8 @@
   ],
   "license": "MIT",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest"
   },
   "type": "module"
 }
