@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if command -v bun &>/dev/null; then
+if [ -f "$SCRIPT_DIR/src/cli.ts" ] && command -v bun &>/dev/null; then
   exec bun "$SCRIPT_DIR/src/cli.ts" "$@"
 else
   exec node "$SCRIPT_DIR/dist/cli.js" "$@"
