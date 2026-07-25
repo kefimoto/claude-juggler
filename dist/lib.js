@@ -514,21 +514,50 @@ export function install(options = {}) {
     if (!existsSync(settingsPath)) {
         console.warn(`Warning: ${settingsPath} not found. Claude Code may not be fully initialized.`);
     }
-    // Determine installation method by checking if claude-juggler is globally available
+    // Determine installation method - check parent process first (bunx/npx), then fall back to global
     let installMethod = "global";
+    // First check if we're being run via bunx/npx by looking at parent process
     try {
-        execFileSync("which", ["claude-juggler"], { encoding: "utf8", timeout: 1000, stdio: "pipe" });
-        // If we get here, claude-juggler is in PATH (globally installed)
-        installMethod = "global";
+        const fs = require("fs");
+        const ppid = process.ppid;
+        if (ppid) {
+            const cmdLine = fs.readFileSync(`/proc/${ppid}/cmdline`, "utf8").split("\0").join(" ");
+            if (cmdLine.includes("bunx")) {
+                installMethod = "bunx";
+            }
+            else if (cmdLine.includes("npx")) {
+                installMethod = "npx";
+            }
+            else {
+                // Check script path as fallback
+                const scriptPath = process.argv[1] || "";
+                if (scriptPath.includes("bunx") || scriptPath.includes(".bun") || scriptPath.includes("/tmp/bunx")) {
+                    installMethod = "bunx";
+                }
+                else if (scriptPath.includes("npx")) {
+                    installMethod = "npx";
+                }
+                else {
+                    // Assume global if we can find it in PATH
+                    try {
+                        execFileSync("which", ["claude-juggler"], { encoding: "utf8", timeout: 1000, stdio: "pipe" });
+                        installMethod = "global";
+                    }
+                    catch {
+                        // Default to npx if not found globally
+                        installMethod = "npx";
+                    }
+                }
+            }
+        }
     }
     catch {
-        // Not globally installed, must be via bunx or npx
-        // Try to detect which by checking if we're in a temp directory
-        const scriptPath = process.argv[1] || "";
-        if (scriptPath.includes("bunx") || scriptPath.includes(".bun") || scriptPath.includes("/tmp/bunx")) {
-            installMethod = "bunx";
+        // Fallback to checking global installation
+        try {
+            execFileSync("which", ["claude-juggler"], { encoding: "utf8", timeout: 1000, stdio: "pipe" });
+            installMethod = "global";
         }
-        else {
+        catch {
             installMethod = "npx";
         }
     }
