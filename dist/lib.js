@@ -24,8 +24,10 @@ export const CONFIG_DIR = process.env.CLAUDE_JUGGLER_DIR || join(homedir(), ".cl
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const LOG_PATH = join(CONFIG_DIR, "prime.log");
 const LOCK_DIR = join(CONFIG_DIR, ".lock.d");
-// Global Claude directory - set via setClaudeDir() before using any account functions
-let globalClaudeDir = join(homedir(), ".claude");
+// Global Claude directory - defaults to ~/.claude, can be overridden via CLAUDE_CONFIG_DIR env var or setClaudeDir()
+let globalClaudeDir = process.env.CLAUDE_CONFIG_DIR
+    ? process.env.CLAUDE_CONFIG_DIR.replace(/^~/, homedir())
+    : join(homedir(), ".claude");
 export function setClaudeDir(dir) {
     globalClaudeDir = dir.replace(/^~/, homedir());
 }
@@ -37,9 +39,13 @@ export const STATE_FILE = join(CONFIG_DIR, "state.json");
 function getCredsPath() {
     return join(globalClaudeDir, ".credentials.json");
 }
-// Get claude.json path for current Claude install
+// Get claude.json path: ~/.claude.json for default install, otherwise inside config dir
 function getClaudeJsonPath() {
-    return join(globalClaudeDir, "claude.json");
+    const defaultClaudeDir = join(homedir(), ".claude");
+    if (globalClaudeDir === defaultClaudeDir) {
+        return join(homedir(), ".claude.json");
+    }
+    return join(globalClaudeDir, ".claude.json");
 }
 function readConfig() {
     if (!existsSync(CONFIG_PATH))
