@@ -48,6 +48,7 @@ Commands:
   prev                     Switch to the previous account in rotation
   lowest                   Switch to the lowest-usage account
   current                  Print the currently active account name
+  version                  Show version
   list-all                 List all Claude installations with saved accounts
   status-all               Show status across all Claude installations
   install [OPTIONS]        Configure /swap and /accounts Claude Code commands and hook
@@ -166,6 +167,19 @@ function main() {
         case "current": {
             const name = currentAccount();
             console.log(name ?? "(none)");
+            break;
+        }
+        case "version": {
+            try {
+                const { readFileSync } = require("fs");
+                const { join } = require("path");
+                const pkgPath = join(__dirname, "..", "package.json");
+                const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+                console.log(`claude-juggler ${pkg.version}`);
+            }
+            catch {
+                console.log("claude-juggler (version unknown)");
+            }
             break;
         }
         case "list-all": {
