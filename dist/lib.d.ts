@@ -82,7 +82,13 @@ export declare function statusAll(): Array<{
     pct: number | null;
     resetsAt: number | null;
 }>;
+interface InstallOptions {
+    installCron?: boolean;
+    noCron?: boolean;
+    claudeDir?: string;
+}
 /** Setup Claude Code integration: create commands and configure hook. */
-export declare function install(): void;
+export declare function install(options?: InstallOptions | boolean): void;
 /** Remove Claude Code integration and config. */
 export declare function uninstall(): void;
+export {};

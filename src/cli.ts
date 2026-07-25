@@ -53,8 +53,12 @@ Usage:
   claude-juggler prev                  Switch to the previous account in rotation
   claude-juggler lowest                Switch to the lowest-usage account
   claude-juggler current               Print the currently active account name
-  claude-juggler install               Configure /swap and /accounts Claude Code
+  claude-juggler install [OPTIONS]    Configure /swap and /accounts Claude Code
                                         commands and usage-threshold hook
+                                        Options:
+                                          --install-cron: setup cron job
+                                          --no-cron: don't setup cron job
+                                          --claude-dir <path>: custom .claude dir
   claude-juggler uninstall             Remove Claude Code integration and config
   claude-juggler config [show|set-warning|set-autoswap|set-strategy]
                                         View or edit warning/autoswap thresholds
@@ -129,9 +133,20 @@ function main(): void {
     case "prime":
       prime();
       break;
-    case "install":
-      install();
+    case "install": {
+      const installCron = rest.includes("--install-cron");
+      const noCron = rest.includes("--no-cron");
+
+      // Find --claude-dir value
+      let claudeDir: string | undefined;
+      const claudeDirIdx = rest.findIndex(arg => arg === "--claude-dir");
+      if (claudeDirIdx !== -1 && claudeDirIdx + 1 < rest.length) {
+        claudeDir = rest[claudeDirIdx + 1];
+      }
+
+      install({ installCron, noCron, claudeDir });
       break;
+    }
     case "uninstall":
       uninstall();
       break;

@@ -378,10 +378,23 @@ export function statusAll() {
     });
 }
 /** Setup Claude Code integration: create commands and configure hook. */
-export function install() {
-    const claudeDir = join(homedir(), ".claude");
+export function install(options = {}) {
+    // Support old boolean signature for backwards compatibility
+    const opts = typeof options === "boolean" ? { installCron: options } : options;
+    const defaultClaudeDir = join(homedir(), ".claude");
+    const claudeDir = opts.claudeDir || defaultClaudeDir;
+    // Verify Claude directory exists
+    if (!existsSync(claudeDir)) {
+        throw new Error(`Claude Code directory not found at ${claudeDir}\n` +
+            "Make sure Claude Code is installed and run: claude auth login\n" +
+            "Or specify a custom directory: claude-juggler install --claude-dir <path>");
+    }
     const commandsDir = join(claudeDir, "commands");
     const settingsPath = join(claudeDir, "settings.json");
+    // Verify settings.json exists (indicates valid Claude install)
+    if (!existsSync(settingsPath)) {
+        console.warn(`Warning: ${settingsPath} not found. Claude Code may not be fully initialized.`);
+    }
     // Determine installation method by checking if claude-juggler is globally available
     let installMethod = "global";
     try {
@@ -522,7 +535,48 @@ bash -lc '${primeCronCmd}'
     console.log(`✓ Updated ~/.claude/settings.json with hook: ${hookScript}`);
     if (existsSync(primeCronPath))
         console.log(`✓ Updated ${primeCronPath}`);
+    // Setup cron job only if BOTH flags are set (non-interactive mode)
+    if (opts.installCron && opts.claudeDir) {
+        // Both flags set: fully non-interactive, auto-install cron
+        setupCron(primeCronPath);
+        console.log("✓ Added cron job: */20 * * * * " + primeCronPath);
+    }
+    else if (!opts.noCron) {
+        // Interactive mode: suggest cron setup
+        console.log("\nTo enable automatic account priming, run:");
+        console.log("  claude-juggler install --install-cron");
+    }
     console.log("\nSetup complete! Use /swap and /accounts in Claude Code, or run: claude-juggler [add|list|use|status]");
+}
+function shouldSetupCron() {
+    // For now, return false - user must use -y flag or manually set up
+    // In a future version with readline, could prompt interactively
+    return false;
+}
+function setupCron(scriptPath) {
+    try {
+        // Get current crontab
+        let crontab = "";
+        try {
+            crontab = execFileSync("crontab", ["-l"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+        }
+        catch {
+            // No existing crontab
+            crontab = "";
+        }
+        // Check if already exists
+        if (crontab.includes(scriptPath)) {
+            return; // Already configured
+        }
+        // Add new cron entry
+        const newEntry = `*/20 * * * * ${scriptPath}\n`;
+        const newCrontab = crontab + newEntry;
+        // Write new crontab
+        execFileSync("crontab", ["-"], { encoding: "utf8", input: newCrontab, stdio: ["pipe", "pipe", "pipe"] });
+    }
+    catch (e) {
+        throw new Error(`Failed to setup cron: ${e.message}`);
+    }
 }
 /** Remove Claude Code integration and config. */
 export function uninstall() {
@@ -553,6 +607,28 @@ export function uninstall() {
     if (existsSync(CONFIG_DIR)) {
         require("fs").rmSync(CONFIG_DIR, { recursive: true });
         console.log(`✓ Removed ${CONFIG_DIR}`);
+    }
+    // Remove cron job
+    try {
+        let crontab = "";
+        try {
+            crontab = execFileSync("crontab", ["-l"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+        }
+        catch {
+            // No crontab to remove
+            crontab = "";
+        }
+        if (crontab.includes("prime-cron.sh")) {
+            const newCrontab = crontab
+                .split("\n")
+                .filter((line) => !line.includes("prime-cron.sh") && line.trim())
+                .join("\n") + (crontab.endsWith("\n") ? "\n" : "");
+            execFileSync("crontab", ["-"], { encoding: "utf8", input: newCrontab, stdio: ["pipe", "pipe", "pipe"] });
+            console.log("✓ Removed cron job");
+        }
+    }
+    catch {
+        // Cron removal failed, but continue
     }
     console.log("\nUninstall complete!");
 }
